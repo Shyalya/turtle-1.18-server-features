@@ -1,7 +1,7 @@
 From b4e37b9670b51804ed9cfc80b29182be942c3241 Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
 Date: Mon, 27 Jul 2026 11:09:50 +0100
-Subject: [PATCH 2/6] Fix playerbot battleground queueing and add a hard match
+Subject: [PATCH 2/7] Fix playerbot battleground queueing and add a hard match
  time limit
 
 - Bots queuing for a BG now go through the opcode handler directly instead

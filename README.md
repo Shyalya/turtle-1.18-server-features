@@ -21,6 +21,7 @@ commit, `git am` may fail to apply cleanly - see "Updating" below.
 | [`0004-...flag-carriers-freezing...`](patches/0004-Fix-WSG-flag-carriers-freezing-forever-when-both-fla.patch) | Fixes WSG flag-carrier bots freezing forever in the middle of the map when the enemy also holds our own flag - they now always head straight to base instead of a "hiding spot" that a separate safety guard then refused to ever leave. |
 | [`0005-...proactively-fetching...`](patches/0005-Stop-WSG-bots-from-proactively-fetching-the-enemy-fl.patch) | Bots no longer walk to the enemy flag spawn on their own initiative to grab it (they patrol instead) - they still defend their own carrier and chase down whoever's holding our flag. Behavior change, not a bug fix. |
 | [`0006-...never-fighting...`](patches/0006-Fix-bots-never-fighting-each-other-in-battlegrounds.patch) | Fixes bots never initiating combat against each other in battlegrounds - the "enemy player near" trigger was only wired into the combat engine, which an idle bot never entered on its own, so two idle enemy bots standing next to each other never fought until a human player attacked one first. |
+| [`0007-...flag-carrier-they...`](patches/0007-Fix-bots-never-attacking-the-enemy-flag-carrier-they.patch) | Fixes bots chasing the enemy flag carrier forever without ever attacking - `AttackEnemyFlagCarrierAction::isUseful()` checked the wrong unit's aura (a copy-paste bug), requiring the *attacking* bot to already be a flag carrier itself instead of checking the *target*. |
 
 ## Requirements
 
