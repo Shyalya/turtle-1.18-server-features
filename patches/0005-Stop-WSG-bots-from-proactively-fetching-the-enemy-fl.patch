@@ -1,0 +1,76 @@
+From c6b0b153aa53a0975fc743fe22229e59bdefc279 Mon Sep 17 00:00:00 2001
+From: shyalya <shyalya@turtle-server.local>
+Date: Mon, 27 Jul 2026 11:43:21 +0100
+Subject: [PATCH 5/6] Stop WSG bots from proactively fetching the enemy flag
+
+Bots still defend (protect their own flag carrier) and chase down an
+enemy who's carrying our flag, but no longer walk to the enemy flag spawn
+on their own initiative to grab it - they patrol instead. Requested
+change, not a bug fix.
+---
+ .../strategy/actions/BattleGroundTactics.cpp  | 42 +++++++------------
+ 1 file changed, 14 insertions(+), 28 deletions(-)
+
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp
+index 0fe2117..a96e36e 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp
+@@ -3064,14 +3064,13 @@ bool BGTactics::selectObjective(bool reset)
+                     }
+                     else
+                     {
+-                        if (bot->GetTeam() == ALLIANCE)
+-                            pos.Set(WS_FLAG_POS_HORDE.x, WS_FLAG_POS_HORDE.y, WS_FLAG_POS_HORDE.z, bot->GetMapId());
+-                        else
+-                            pos.Set(WS_FLAG_POS_ALLIANCE.x, WS_FLAG_POS_ALLIANCE.y, WS_FLAG_POS_ALLIANCE.z, bot->GetMapId());
+-
+-                        //ostringstream out;
+-                        //out << "Going to " << (bot->GetTeam() == ALLIANCE ? "take Horde flag" : "take Alliance flag");
+-                        //bot->Say(out.str(), LANG_UNIVERSAL);
++                        // Was: proactively head to the enemy flag spawn to go
++                        // grab it. Disabled on request (2026-07-27) - bots
++                        // should defend/return flags but not actively go
++                        // fetch the enemy one themselves. Patrol instead.
++                        float rx, ry, rz;
++                        bot->GetRandomPoint(1227.446f, 1476.235f, 307.484f, 150.0f, rx, ry, rz);
++                        pos.Set(rx, ry, rz, bot->GetMapId());
+                     }
+                 }
+             }
+@@ -3088,26 +3087,13 @@ bool BGTactics::selectObjective(bool reset)
+                 }
+                 else
+                 {
+-                    if (role > 9)  // test patrol
+-                    {
+-                        float rx, ry, rz;
+-                        bot->GetRandomPoint(1227.446f, 1476.235f, 307.484f, 150.0f, rx, ry, rz);
+-                        pos.Set(rx, ry, rz, bot->GetMapId());
+-                        //ostringstream out;
+-                        //out << "Patrolling battlefield";
+-                        //bot->Say(out.str(), LANG_UNIVERSAL);
+-                    }
+-                    else
+-                    {
+-                        if (bot->GetTeam() == ALLIANCE)
+-                            pos.Set(WS_FLAG_POS_HORDE.x, WS_FLAG_POS_HORDE.y, WS_FLAG_POS_HORDE.z, bot->GetMapId());
+-                        else
+-                            pos.Set(WS_FLAG_POS_ALLIANCE.x, WS_FLAG_POS_ALLIANCE.y, WS_FLAG_POS_ALLIANCE.z, bot->GetMapId());
+-
+-                        //ostringstream out;
+-                        //out << "Going to " << (bot->GetTeam() == ALLIANCE ? "take Horde flag" : "take Alliance flag");
+-                        //bot->Say(out.str(), LANG_UNIVERSAL);
+-                    }
++                    // Was: patrol only if role>9, otherwise proactively go
++                    // grab the enemy flag. Now always patrols - see the
++                    // "supporter" branch above for why the offensive
++                    // flag-fetch was removed (2026-07-27).
++                    float rx, ry, rz;
++                    bot->GetRandomPoint(1227.446f, 1476.235f, 307.484f, 150.0f, rx, ry, rz);
++                    pos.Set(rx, ry, rz, bot->GetMapId());
+                 }
+             }
+         }
+-- 
+2.47.3
+
