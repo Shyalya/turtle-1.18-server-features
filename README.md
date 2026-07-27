@@ -15,9 +15,10 @@ commit, `git am` may fail to apply cleanly - see "Updating" below.
 
 | Patch | What it does |
 |---|---|
-| [`0001-...world-buffs...`](patches/0001-Restrict-world-buffs-by-zone-disable-Dragonslayer-bu.patch) | Restricts automatic world buffs by zone: Spirit of Zandalar only in Stranglethorn Vale, Warchief's Blessing only for Horde in Crossroads or Orgrimmar. Disables Rallying Cry of the Dragonslayer entirely. Also adds an `AutoDonationPoints` system that credits real online players (bots excluded) donation points (`shop_coins`) for every full hour played. |
+| [`0001-...world-buffs...`](patches/0001-Restrict-world-buffs-by-zone-disable-Dragonslayer-bu.patch) | Restricts automatic world buffs by zone: Spirit of Zandalar only in Stranglethorn Vale, Warchief's Blessing only for Horde in Crossroads or Orgrimmar. Also adds an `AutoDonationPoints` system that credits real online players (bots excluded) donation points (`shop_coins`) for every full hour played. (Note: this commit's title says it disables Rallying Cry of the Dragonslayer - that was a mistake, corrected by patch 0004 below.) |
 | [`0002-...battleground-queueing...`](patches/0002-Fix-playerbot-battleground-queueing-and-add-a-hard-m.patch) | Fixes playerbots silently failing to actually queue for battlegrounds (bot sessions aren't registered in `sWorld.m_sessions`, so their queue packet never got processed). Bots also get `+pvp` on BG entry so they seek out enemies instead of only reacting when attacked, and WSG/AB matches get a 20-minute hard time limit so bot-heavy matches that never cap objectives don't run forever. |
 | [`0003-...beginners-guild...`](patches/0003-Auto-join-new-low-level-players-into-the-configured-.patch) | Auto-joins new, guildless real players (level 5 or below) into a configured "beginners guild" on first login. |
+| [`0004-...Rallying-Cry...`](patches/0004-Cast-Rallying-Cry-of-the-Dragonslayer-for-Alliance-i.patch) | Fixes patch 0001: Rallying Cry of the Dragonslayer now casts for Alliance in Stormwind City, symmetric to Warchief's Blessing for Horde. Apply this together with 0001. |
 
 ## Requirements
 

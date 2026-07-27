@@ -1,0 +1,84 @@
+From e4844efb6b16e47fe2398b43167f1f3ee110b725 Mon Sep 17 00:00:00 2001
+From: shyalya <shyalya@turtle-server.local>
+Date: Mon, 27 Jul 2026 11:03:44 +0100
+Subject: [PATCH 4/4] Cast Rallying Cry of the Dragonslayer for Alliance in
+ Stormwind City
+
+Symmetric to Warchief's Blessing (Horde, Crossroads/Orgrimmar) - the
+previous commit disabled this buff entirely by mistake instead of
+restricting it by zone like intended.
+---
+ src/game/World.cpp | 29 +++++++++++++++++------------
+ 1 file changed, 17 insertions(+), 12 deletions(-)
+
+diff --git a/src/game/World.cpp b/src/game/World.cpp
+index 94197bb..0667d9d 100644
+--- a/src/game/World.cpp
++++ b/src/game/World.cpp
+@@ -2703,12 +2703,11 @@ void World::Update(uint32 diff)
+ 
+     // --- Custom: AutoWorldBuff. Verpasst echten Online-Spielern (keine Bots,
+     // kein Discord-Bruecken-Charakter) periodisch Geist von Zandalar (nur in
+-    // Stranglethorn Vale) und Segen des Kriegshaeuptlings (nur Horde, nur in
+-    // Crossroads). Kriegsschrei des Drachentoeters (Rallying Cry of the
+-    // Dragonslayer, spell 22888, das Allianz-Pendant zu Segen des
+-    // Kriegshaeuptlings) wird seit 2026-07-27 NICHT MEHR gewirkt (auf
+-    // Wunsch deaktiviert). Intervall randomisiert zwischen Min-/MaxInterval
+-    // (ms); WarningInterval (ms) vorher kommt eine Ansage. ---
++    // Stranglethorn Vale), Segen des Kriegshaeuptlings (nur Horde, nur in
++    // Crossroads/Orgrimmar) und Kriegsschrei des Drachentoeters (nur Allianz,
++    // nur in Sturmwind - das Allianz-Pendant zu Segen des Kriegshaeuptlings).
++    // Intervall randomisiert zwischen Min-/MaxInterval (ms); WarningInterval
++    // (ms) vorher kommt eine Ansage. ---
+     if (sConfig.GetBoolDefault("AutoWorldBuff.Enable", false))
+     {
+         // Einmalige Vorwarnung pro Zyklus, kurz bevor die Buffs erneuert werden.
+@@ -2717,7 +2716,7 @@ void World::Update(uint32 diff)
+             m_worldBuffWarned = true;
+             uint32 warnMinutes = std::max<uint32>(1, m_worldBuffWarningMs / 60000);
+             SendWorldText(3 /* LANG_SYSTEMMESSAGE */,
+-                string_format("In {} Minuten werden die Weltbuffs erneuert: Geist von Zandalar (in Stranglethorn) + Segen des Kriegshäuptlings (in Crossroads oder Orgrimmar)!", warnMinutes).c_str());
++                string_format("In {} Minuten werden die Weltbuffs erneuert: Geist von Zandalar (in Stranglethorn) + Segen des Kriegshäuptlings (in Crossroads/Orgrimmar) + Kriegsschrei des Drachentöters (in Sturmwind)!", warnMinutes).c_str());
+         }
+ 
+         if (m_worldBuffTimer <= diff)
+@@ -2734,12 +2733,13 @@ void World::Update(uint32 diff)
+             m_worldBuffWarned = false;
+ 
+             // Zonen-/Area-IDs aus turtle_world.area_template (2026-07-27):
+-            // Stranglethorn Vale (33) und Orgrimmar (1637) sind selbst
+-            // Top-Level-Zoneneintraege (zone_id 0), The Crossroads dagegen
+-            // nur eine AREA innerhalb der Barrens (entry 380, zone_id 17) -
+-            // deshalb dafuer GetAreaId() statt GetZoneId().
++            // Stranglethorn Vale (33), Orgrimmar (1637) und Stormwind City
++            // (1519) sind selbst Top-Level-Zoneneintraege (zone_id 0), The
++            // Crossroads dagegen nur eine AREA innerhalb der Barrens (entry
++            // 380, zone_id 17) - deshalb dafuer GetAreaId() statt GetZoneId().
+             const uint32 ZONE_STRANGLETHORN_VALE = 33;
+             const uint32 ZONE_ORGRIMMAR = 1637;
++            const uint32 ZONE_STORMWIND_CITY = 1519;
+             const uint32 AREA_THE_CROSSROADS = 380;
+ 
+             uint32 buffedCount = 0;
+@@ -2773,12 +2773,17 @@ void World::Update(uint32 diff)
+                     worldBuffPlayer->CastSpell(worldBuffPlayer, 16609, true); // Warchief's Blessing
+                     worldBuffCast = true;
+                 }
++                if (worldBuffPlayer->GetTeam() == ALLIANCE && worldBuffPlayer->GetZoneId() == ZONE_STORMWIND_CITY)
++                {
++                    worldBuffPlayer->CastSpell(worldBuffPlayer, 22888, true); // Rallying Cry of the Dragonslayer
++                    worldBuffCast = true;
++                }
+                 if (worldBuffCast)
+                     ++buffedCount;
+             }
+ 
+             if (buffedCount)
+-                SendWorldText(3 /* LANG_SYSTEMMESSAGE */, "Weltbuffs erneuert: Geist von Zandalar (in Stranglethorn) + Segen des Kriegshäuptlings (in Crossroads oder Orgrimmar)!");
++                SendWorldText(3 /* LANG_SYSTEMMESSAGE */, "Weltbuffs erneuert: Geist von Zandalar (in Stranglethorn) + Segen des Kriegshäuptlings (in Crossroads/Orgrimmar) + Kriegsschrei des Drachentöters (in Sturmwind)!");
+         }
+         else
+             m_worldBuffTimer -= diff;
+-- 
+2.47.3
+
