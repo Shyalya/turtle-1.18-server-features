@@ -1,0 +1,168 @@
+From eba74c08d1e29c1a431b59141b19adb9f3eb9b31 Mon Sep 17 00:00:00 2001
+From: shyalya <shyalya@turtle-server.local>
+Date: Mon, 27 Jul 2026 10:33:59 +0100
+Subject: [PATCH 2/3] Fix playerbot battleground queueing and add a hard match
+ time limit
+
+- Bots queuing for a BG now go through the opcode handler directly instead
+  of ai->QueuePacket() - bot sessions are never registered in
+  sWorld.m_sessions, so World::UpdateSessions() never drained their
+  recvQueue and the join packet silently vanished forever.
+- Falls back to a server-accepted dummy battlemaster guid (1337) when no
+  physical Battlemaster NPC is loaded nearby, instead of requiring one.
+- Bots now get +pvp on entering a BG so they actively seek out enemy
+  players instead of only reacting when already attacked.
+- WSG/AB matches now have a 20-minute hard cutoff (winner = whoever's
+  ahead on points/flags) so bot-heavy matches that never cap objectives
+  don't run forever.
+---
+ src/game/Battlegrounds/BattleGround.cpp       | 10 +++++
+ .../actions/BattleGroundJoinAction.cpp        | 42 +++++++++++++------
+ 2 files changed, 40 insertions(+), 12 deletions(-)
+
+diff --git a/src/game/Battlegrounds/BattleGround.cpp b/src/game/Battlegrounds/BattleGround.cpp
+index 70cc1f2..33a13ac 100644
+--- a/src/game/Battlegrounds/BattleGround.cpp
++++ b/src/game/Battlegrounds/BattleGround.cpp
+@@ -312,6 +312,16 @@ void BattleGround::Update(uint32 diff)
+     /***           BATTLEGROUND BALLANCE SYSTEM            ***/
+     /*********************************************************/
+ 
++    // Custom: hard time limit for WSG/AB so bot-heavy matches that never cap flags/nodes
++    // (bots standing around instead of fighting) don't run forever. Whoever leads on
++    // points/flags when the clock runs out wins, same resolution as premature-finish.
++    if (!IsArena() && GetStatus() == STATUS_IN_PROGRESS &&
++        (GetTypeID() == BATTLEGROUND_WS || GetTypeID() == BATTLEGROUND_AB) &&
++        m_StartTime > 20 * MINUTE * IN_MILLISECONDS)
++    {
++        EndBattleGround(GetWinningTeam());
++    }
++
+     // if less then minimum players are in on one side, then start premature finish timer
+     if (!IsArena() && GetStatus() == STATUS_IN_PROGRESS && sBattleGroundMgr.GetPrematureFinishTime() && (GetPlayersCountByTeam(ALLIANCE) < GetMinPlayersPerTeam() || GetPlayersCountByTeam(HORDE) < GetMinPlayersPerTeam()))
+     {
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundJoinAction.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundJoinAction.cpp
+index 4ec0a27..dc09558 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundJoinAction.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundJoinAction.cpp
+@@ -45,7 +45,9 @@ bool BGJoinAction::Execute(Event& event)
+     if (!queueType) // force join to fill bg
+     {
+         if (bgList.empty())
++        {
+             return false;
++        }
+ 
+         BattleGroundQueueTypeId queueTypeId = (BattleGroundQueueTypeId)bgList[urand(0, bgList.size() - 1)];
+         BattleGroundTypeId bgTypeId = sServerFacade.BgTemplateId(queueTypeId);
+@@ -137,7 +139,8 @@ bool BGJoinAction::Execute(Event& event)
+         sPlayerbotAIConfig.logEvent(ai, "BGJoinAction", _bgType, std::to_string(queueTypeId));
+     }
+ 
+-   return JoinQueue(queueType);
++   bool joinResult = JoinQueue(queueType);
++   return joinResult;
+ }
+ 
+ #ifndef MANGOSBOT_ZERO
+@@ -665,11 +668,13 @@ bool BGJoinAction::JoinQueue(uint32 type)
+     uint32 TeamId = GetTeamIndexByTeamId(bot->GetTeam());
+ 
+     // check if already in queue
+-    if (bot->InBattleGroundQueueForBattleGroundQueueType(queueTypeId))
++    bool alreadyQueued = bot->InBattleGroundQueueForBattleGroundQueueType(queueTypeId);
++    bool hasAccess = bot->GetBGAccessByLevel(bgTypeId);
++    if (alreadyQueued)
+         return false;
+ 
+     // check bg req level
+-    if (!bot->GetBGAccessByLevel(bgTypeId))
++    if (!hasAccess)
+         return false;
+ 
+     // get BattleMaster unit
+@@ -714,18 +719,21 @@ bool BGJoinAction::JoinQueue(uint32 type)
+ 
+    // get battlemaster
+    Unit* unit = ai->GetUnit(AI_VALUE2(CreatureDataPair const*, "bg master", bgTypeId));
+-#ifndef MANGOSBOT_TWO
+-   if (!unit)
+-#else
++#ifdef MANGOSBOT_TWO
+    if (!unit && isArena)
+-#endif
+    {
+        sLog.outDetail("Bot %d could not find Battlemaster to join", bot->GetGUIDLow());
+        return false;
+    }
++#endif
++   // Battlemaster NPC may not be loaded/active (bots scattered across the world).
++   // The server itself accepts guid raw value 1337 as a queue-via-command bypass
++   // (see WorldSession::HandleBattlemasterJoinOpcode, queuedviaCommand check) -
++   // use that instead of requiring a physically loaded Battlemaster Unit.
++   ObjectGuid bmFallbackGuid = ObjectGuid(uint64(1337));
+ // in wotlk only arena requires battlemaster guid
+ #ifndef MANGOSBOT_TWO
+-   ObjectGuid guid = unit->GetObjectGuid();
++   ObjectGuid guid = unit ? unit->GetObjectGuid() : bmFallbackGuid;
+ #else
+    ObjectGuid guid = isArena ? unit->GetObjectGuid() : bot->GetObjectGuid();
+ #endif
+@@ -817,7 +825,7 @@ bool BGJoinAction::JoinQueue(uint32 type)
+ 
+    WorldPacket packet(CMSG_BATTLEMASTER_JOIN, 20);
+ #ifdef MANGOSBOT_ZERO
+-   packet << unit->GetObjectGuid() << mapId << instanceId << joinAsGroup;
++   packet << guid << mapId << instanceId << joinAsGroup;
+    sLog.outDetail("Bot #%d %s:%d <%s> queued %s", bot->GetGUIDLow(), bot->GetTeam() == ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName(), _bgType.c_str());
+ #else
+    sLog.outDetail("Bot #%d %s:%d <%s> queued %s %s", bot->GetGUIDLow(), bot->GetTeam() == ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName(), _bgType.c_str(), isRated ? "Rated Arena" : isArena ? "Arena" :
+@@ -835,7 +843,12 @@ bool BGJoinAction::JoinQueue(uint32 type)
+    }
+ #endif
+ 
+-   ai->QueuePacket(packet);
++   // Bot sessions are never registered in sWorld.m_sessions (created directly via
++   // "new WorldSession(...)" in PlayerbotMgr, bypassing sWorld.AddSession()), so
++   // World::UpdateSessions() never drains their recvQueue - ai->QueuePacket() here
++   // would silently vanish forever. Call the opcode handler directly instead,
++   // exactly like the arena branch above already does with HandleBattlemasterJoinArena.
++   bot->GetSession()->HandleBattlemasterJoinOpcode(packet);
+    return true;
+ }
+ 
+@@ -1058,7 +1071,7 @@ bool BGLeaveAction::Execute(Event& event)
+         bot->GetSession()->HandleLeaveBattlefieldOpcode(packet);
+     }
+     else
+-        bot->GetSession()->HandleBattlefieldPortOpcode(packet);
++        bot->GetSession()->HandleBattleFieldPortOpcode(packet);
+ 
+     if (sRandomPlayerbotMgr.IsFreeBot(bot))
+         ai->SetMaster(NULL);
+@@ -1294,6 +1307,7 @@ bool BGStatusAction::Execute(Event& event)
+         if (sRandomPlayerbotMgr.IsFreeBot(bot))
+             ai->SetMaster(NULL);
+ 
++        ai->ChangeStrategy("-pvp", BotState::BOT_STATE_COMBAT);
+         ai->ChangeStrategy("-warsong", BotState::BOT_STATE_COMBAT);
+         ai->ChangeStrategy("-warsong", BotState::BOT_STATE_NON_COMBAT);
+         ai->ChangeStrategy("-arathi", BotState::BOT_STATE_COMBAT);
+@@ -1403,9 +1417,13 @@ bool BGStatusAction::Execute(Event& event)
+             return false;
+         }
+ #endif
+-        bot->GetSession()->HandleBattlefieldPortOpcode(packet);
++        bot->GetSession()->HandleBattleFieldPortOpcode(packet);
+ 
+         ai->ResetStrategies(false);
++        // Bots otherwise only fight back when attacked (assist/dps strategies react to
++        // an existing target) but never seek out enemy players on their own inside a BG.
++        // +pvp wires up the "enemy player near" -> "attack enemy player" trigger.
++        ai->ChangeStrategy("+pvp", BotState::BOT_STATE_COMBAT);
+         context->GetValue<uint32>("bg role")->Set(urand(0, 9));
+         ai::PositionMap& posMap = context->GetValue<ai::PositionMap&>("position")->Get();
+         ai::PositionEntry pos = context->GetValue<ai::PositionMap&>("position")->Get()["bg objective"];
+-- 
+2.47.3
+
