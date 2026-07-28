@@ -1,26 +1,72 @@
-From 805d626f4003282a6ef34973613a9d3695d5c633 Mon Sep 17 00:00:00 2001
+From eb47ef5bb0cf08441e94eec24765754ce0ade80a Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
-Date: Tue, 28 Jul 2026 10:01:34 +0100
-Subject: [PATCH 1/6] Add zone-restricted world buffs and automatic donation
- points
+Date: Tue, 28 Jul 2026 10:10:26 +0100
+Subject: [PATCH 1/4] Add world buffs, automatic donation points, and fix the
+ donation shop
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
-World buffs (each with its own independent timer, so they don't all fire at once):
+World buffs — each on its own independent timer, so they don't all fire at once:
 - Spirit of Zandalar (24425): anyone in Stranglethorn Vale.
-- Warchief's Blessing (16609): Horde only, in Crossroads or Orgrimmar (both locations are served by the same timer, i.e. always simultaneously).
-- Rallying Cry of the Dragonslayer (22888): both factions, each in their own capital - Alliance in Stormwind City, Horde in Orgrimmar (matches retail, where the Onyxia/Nefarian head is turned in at both capitals).
+- Warchief's Blessing (16609): Horde only, in Crossroads or Orgrimmar (both locations share one timer, so they are always served simultaneously).
+- Rallying Cry of the Dragonslayer (22888): both factions, each in their own capital — Alliance in Stormwind City, Horde in Orgrimmar (matches retail, where the Onyxia/Nefarian head is turned in at both capitals).
 - The first roll after a (re)start uses a short interval (AutoWorldBuff.FirstMinInterval/FirstMaxInterval, default 10min-2h) so a server that restarts often doesn't delay the buffs by a full interval every time; later rolls use AutoWorldBuff.MinInterval/MaxInterval (default 1h-3h). A warning is announced AutoWorldBuff.WarningInterval (default 10min) beforehand.
 
 AutoDonationPoints:
-- Real online players (bots and the Discord bridge excluded) earn AutoDonationPoints.Amount donation points (shop_coins) per AutoDonationPoints.IntervalMs online, tracked per-account so login time doesn't matter.
-- Progress is persisted in the `donation_point_progress` table (login DB) and reloaded per account after a restart - it used to live in RAM only and reset to zero on every restart, so with frequent restarts a normal player could never reach a full hour while the permanently-connected Discord bridge was the only "session" that did. Written on every credit plus every AutoDonationPoints.FlushIntervalMs (default 5min).
-- The bot/bridge exclusion compares account names case-insensitively. It previously compared against "DISCORD" while the account is actually named "discord", so the Discord bridge itself collected the points and its chat output showed up as "[Server]: You received ..." in the Discord channel.
+- Real online players (bots and the Discord bridge excluded) earn AutoDonationPoints.Amount donation points (shop_coins) per AutoDonationPoints.IntervalMs online, tracked per account so login time doesn't matter.
+- Progress is persisted in the `donation_point_progress` table (login DB) and reloaded per account after a restart. It used to live in memory only and reset to zero on every restart, so with frequent restarts a normal player could never reach a full hour — while the permanently-connected Discord bridge was the only "session" that did. Written on every payout plus every AutoDonationPoints.FlushIntervalMs (default 5min).
+- The bot/bridge exclusion now compares account names case-insensitively. It previously compared against "DISCORD" while the account is actually named "discord", so the Discord bridge itself collected the points and its chat output surfaced as "[Server]: You received ..." in the Discord channel.
 
-Requires: new config keys (see conf/ in this patch series) and the `donation_point_progress` table (see sql/).
+Donation shop categories (bundled here because donation points are pointless without a working shop):
+- The in-game "Donation Rewards" window showed only the "About" tab and no categories at all. The client's Shop_ProcessCategories (Interface\FrameXML\Turtle_ShopUI\Turtle_ShopUI.lua, inside patch-7.mpq) expects FOUR `=`-delimited fields per category — `id=parentId=name=icon` — and reads field 2 as the subcategory parent via tonumber(), then evaluates `if parentID > 0`. The server sent only three fields (`id=name=icon`), so field 2 was the category NAME, tonumber() returned nil, and comparing nil > 0 raised a Lua error that aborted the parse loop on the very first category.
+- "About" still appeared because the client injects it itself as a synthetic `0=0=About=about;` entry (four fields, parses fine) before the server's first real category kills the loop — which is why the window looked half-alive rather than empty.
+- This server has no subcategories (shop_categories has no parent column), so parentId is always sent as 0 = top-level. The sibling "Entries:" reply was already adapted to this client's 13-field format in ObjectMgr::LoadShop; only the category line had been missed.
+
+Requires: new config keys (conf/) and the `donation_point_progress` table (sql/).
 ---
- src/game/World.cpp | 218 +++++++++++++++++++++++++++++++++++++++++++++
- src/game/World.h   |  31 +++++++
- 2 files changed, 249 insertions(+)
+ src/game/Handlers/ChatHandler.cpp |  21 ++-
+ src/game/World.cpp                | 218 ++++++++++++++++++++++++++++++
+ src/game/World.h                  |  31 +++++
+ 3 files changed, 268 insertions(+), 2 deletions(-)
 
+diff --git a/src/game/Handlers/ChatHandler.cpp b/src/game/Handlers/ChatHandler.cpp
+index b66e908..3277da7 100644
+--- a/src/game/Handlers/ChatHandler.cpp
++++ b/src/game/Handlers/ChatHandler.cpp
+@@ -1193,13 +1193,30 @@ bool WorldSession::HandleTurtleAddonMessages(uint32 lang, uint32 type, std::stri
+ 
+             if (strstr(msg.c_str(), "Categories"))
+             {
++                // Format per category is `id=parentId=name=icon;` - FOUR fields.
++                // The client (Turtle_ShopUI.lua's Shop_ProcessCategories, in
++                // patch-7.mpq) reads catEx[2] as the SUBCATEGORY PARENT id via
++                // tonumber() and then immediately does `if parentID > 0`. We
++                // used to send only three fields (`id=name=icon;`), so catEx[2]
++                // was the category NAME, tonumber() returned nil, and comparing
++                // nil > 0 threw a Lua error that aborted the whole parse loop.
++                // Symptom (confirmed live 2026-07-28): the shop window showed
++                // ONLY the "About" tab and no categories at all - About renders
++                // because the client injects it itself as a synthetic
++                // `0=0=About=about;` entry (four fields, parses fine) before
++                // the server's first real category kills the loop.
++                // This server has no subcategories (shop_categories has no
++                // parent column), so parentId is always 0 = top-level.
++                // The sibling "Entries:" reply below was already fixed for this
++                // client's 13-field format (see ObjectMgr::LoadShop) - only the
++                // category line was missed at the time.
+                 std::string categories = "Categories:";
+ 
+                 for (auto& itr : sObjectMgr.GetShopCategoriesList())
+                     if (sWorld.getConfig(CONFIG_BOOL_SEA_NETWORK))
+-                        categories += std::to_string(itr.first) + "=" + itr.second.Name_loc4 + "=" + itr.second.Icon + ";";
++                        categories += std::to_string(itr.first) + "=0=" + itr.second.Name_loc4 + "=" + itr.second.Icon + ";";
+                     else
+-                        categories += std::to_string(itr.first) + "=" + itr.second.Name + "=" + itr.second.Icon + ";";
++                        categories += std::to_string(itr.first) + "=0=" + itr.second.Name + "=" + itr.second.Icon + ";";
+ 
+                 _player->SendAddonMessage(prefix, categories);
+                 return true;
 diff --git a/src/game/World.cpp b/src/game/World.cpp
 index e9f65a2..56d80db 100644
 --- a/src/game/World.cpp

@@ -1,26 +1,34 @@
-From 91d35f4ec2c2919e974c90797c3b68ba975d168d Mon Sep 17 00:00:00 2001
+From f931071560265d69f75ffa5f2ccfaebb75e8758c Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
-Date: Tue, 28 Jul 2026 10:02:07 +0100
-Subject: [PATCH 3/6] Fix playerbot battleground queueing and make bots
- actually fight
+Date: Tue, 28 Jul 2026 10:21:18 +0100
+Subject: [PATCH 3/4] Fix playerbot battlegrounds: queueing, combat, and
+ flag-carrier behaviour
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
-Queueing:
-- Bots queuing for a BG now go through the opcode handler directly instead of ai->QueuePacket() - bot sessions are never registered in sWorld.m_sessions, so World::UpdateSessions() never drained their recvQueue and the join packet silently vanished forever.
+Queueing (bots never actually got into battlegrounds at all):
+- Bots queuing for a BG now go through the opcode handler directly instead of ai->QueuePacket() — bot sessions are never registered in sWorld.m_sessions, so World::UpdateSessions() never drained their recvQueue and the join packet silently vanished forever.
 - Falls back to a server-accepted dummy battlemaster guid (1337) when no physical Battlemaster NPC is loaded nearby, instead of requiring one.
-- WSG/AB matches now have a 20-minute hard cutoff (winner = whoever's ahead on points/flags) so bot-heavy matches that never cap objectives don't run forever.
+- WSG/AB matches get a 20-minute hard cutoff (winner = whoever leads on points/flags) so bot-heavy matches that never cap objectives don't run forever.
 
-Combat engagement (previously bots only ever fought back when a human player directly attacked them - never proactively, and never assisting each other):
-- The +pvp strategy's "enemy player near" trigger was only wired into the combat engine, which an idle bot never entered on its own - now also registered for the non-combat engine and applied to both engines on BG entry.
-- The underlying "enemy player targets" list was built exclusively from "attackers" (units already in an active threat relationship), so an idle enemy who hadn't attacked anyone was invisible to this whole detection chain. Now falls back to "possible targets" (a genuine proximity scan, no threat-table dependency) when in a battleground.
-- AttackEnemyFlagCarrierAction::isUseful() checked the wrong unit's aura (a copy-paste bug from a neighboring function), requiring the *attacking* bot to already be a flag carrier itself instead of checking the *target* - bots chased flag carriers forever without ever attacking once they caught up.
+Combat (bots only ever fought back when a human directly attacked them — never proactively, never assisting each other). Three independent causes:
+- The +pvp strategy's "enemy player near" trigger was only registered for the combat engine, which an idle bot never entered on its own. Now also registered for the non-combat engine and applied to both on BG entry.
+- The underlying "enemy player targets" list was built exclusively from "attackers" — units already in an active threat relationship — so an idle enemy who hadn't attacked anyone was invisible to the whole detection chain. Now falls back to "possible targets" (a real proximity scan, no threat-table dependency) while in a battleground.
+- AttackEnemyFlagCarrierAction::isUseful() tested the wrong unit's aura (copy-pasted from a neighbouring function), requiring the *attacking* bot to already carry a flag itself instead of checking the *target*. Bots chased flag carriers forever without ever attacking once they caught up.
+
+Flag carriers:
+- No longer freeze forever mid-map when the enemy also holds our flag. They previously got sent to a random "hiding spot" in that case, and a separate safety guard then permanently refused to pick a new objective once the bot arrived. They now head straight for base — worst case waiting there until our flag returns.
+- Bots no longer walk to the enemy flag spawn on their own initiative (they patrol instead); they still defend their own carrier and chase whoever holds our flag. Exception: if the bot's own team has zero real players, it resumes actively fetching — checked per team, not "anyone in the match", since a solo human always counts as present on their own team. A human playing solo against an all-bot team therefore still faces opposition that tries to cap, while matches with real players on both sides are unaffected.
 ---
- src/game/Battlegrounds/BattleGround.cpp       | 10 ++++
- .../actions/BattleGroundJoinAction.cpp        | 49 ++++++++++++++-----
- .../strategy/actions/ChooseTargetActions.cpp  | 12 ++++-
- .../generic/AttackEnemyPlayersStrategy.cpp    |  7 +++
- .../generic/AttackEnemyPlayersStrategy.h      | 12 +++++
- .../strategy/values/EnemyPlayerValue.cpp      | 21 ++++++++
- 6 files changed, 98 insertions(+), 13 deletions(-)
+ src/game/Battlegrounds/BattleGround.cpp       |  10 ++
+ .../actions/BattleGroundJoinAction.cpp        |  49 ++++++--
+ .../strategy/actions/BattleGroundTactics.cpp  | 117 +++++++++++-------
+ .../strategy/actions/ChooseTargetActions.cpp  |  12 +-
+ .../generic/AttackEnemyPlayersStrategy.cpp    |   7 ++
+ .../generic/AttackEnemyPlayersStrategy.h      |  12 ++
+ .../strategy/values/EnemyPlayerValue.cpp      |  21 ++++
+ 7 files changed, 168 insertions(+), 60 deletions(-)
 
 diff --git a/src/game/Battlegrounds/BattleGround.cpp b/src/game/Battlegrounds/BattleGround.cpp
 index 70cc1f2..33a13ac 100644
@@ -172,6 +180,164 @@ index 4ec0a27..58f12f6 100644
          context->GetValue<uint32>("bg role")->Set(urand(0, 9));
          ai::PositionMap& posMap = context->GetValue<ai::PositionMap&>("position")->Get();
          ai::PositionEntry pos = context->GetValue<ai::PositionMap&>("position")->Get()["bg objective"];
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp
+index 3478834..bd29c95 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundTactics.cpp
+@@ -2958,6 +2958,27 @@ bool BGTactics::moveToStart(bool force)
+     return true;
+ }
+ 
++// (2026-07-28) Whether a REAL player (not a bot) is on the given TEAM in
++// this battleground - deliberately scoped to one team, not "anyone in the
++// match", since a solo human always counts as present on their OWN team;
++// what actually matters is whether the OPPOSING (all-bot) team has nobody
++// driving it. Used to let bots on an all-bot team go fetch the enemy flag
++// on their own initiative again, since otherwise that team never even
++// tries to cap and a human playing solo against bots always wins trivially
++// (see selectObjective()'s WSG branch, "Stop WSG bots from proactively
++// fetching the enemy flag", 2026-07-27 - correct for real PvP matches with
++// humans on both sides, but makes solo/bots-only testing one-sided).
++static bool BgTeamHasRealPlayer(BattleGround* bg, Team team)
++{
++    for (auto const& itr : bg->GetPlayers())
++    {
++        if (Player* p = sObjectMgr.GetPlayer(itr.first))
++            if (!p->GetPlayerbotAI() && p->GetTeam() == team)
++                return true;
++    }
++    return false;
++}
++
+ bool BGTactics::selectObjective(bool reset)
+ {
+     BattleGround *bg = bot->GetBattleGround();
+@@ -3012,30 +3033,23 @@ bool BGTactics::selectObjective(bool reset)
+ 
+         if (bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG))
+         {
++            // Always head straight for home base with the flag, even if the
++            // enemy also currently holds our own flag (teamFlagTaken()) -
++            // previously this sent the carrier to a random "hiding spot"
++            // instead in that case, and resetObjective()'s "don't switch
++            // hiding spots" guard (see its comment: "disabled for now until
++            // hiding spots reimplemented since it causes bots to stop
++            // moving") then permanently refused to ever re-pick a new
++            // objective once the bot arrived there - the flag carrier would
++            // freeze in the middle of the field forever, confirmed live
++            // 2026-07-27. Heading home unconditionally sidesteps that: the
++            // bot just waits at its own base (worst case) instead of
++            // freezing at an arbitrary hiding spot, and can still capture
++            // the instant our flag comes home.
+             if (bot->GetTeam() == ALLIANCE)
+-            {
+-                if (teamFlagTaken())
+-                {
+-                    Position hidePos = WS_FLAG_HIDE_ALLIANCE[urand(0, 4)];
+-                    pos.Set(hidePos.x, hidePos.y, hidePos.z, bot->GetMapId());
+-                }
+-                else
+-                {
+-                    pos.Set(WS_FLAG_POS_ALLIANCE.x, WS_FLAG_POS_ALLIANCE.y, WS_FLAG_POS_ALLIANCE.z, bot->GetMapId());
+-                }
+-            }
++                pos.Set(WS_FLAG_POS_ALLIANCE.x, WS_FLAG_POS_ALLIANCE.y, WS_FLAG_POS_ALLIANCE.z, bot->GetMapId());
+             else
+-            {
+-                if (teamFlagTaken())
+-                {
+-                    Position hidePos = WS_FLAG_HIDE_HORDE[urand(0, 4)];
+-                    pos.Set(hidePos.x, hidePos.y, hidePos.z, bot->GetMapId());
+-                }
+-                else
+-                {
+-                    pos.Set(WS_FLAG_POS_HORDE.x, WS_FLAG_POS_HORDE.y, WS_FLAG_POS_HORDE.z, bot->GetMapId());
+-                }
+-            }
++                pos.Set(WS_FLAG_POS_HORDE.x, WS_FLAG_POS_HORDE.y, WS_FLAG_POS_HORDE.z, bot->GetMapId());
+         }
+         else
+         {
+@@ -3069,16 +3083,28 @@ bool BGTactics::selectObjective(bool reset)
+                         //out << "Attacking " << (bot->GetTeam() == ALLIANCE ? "Horde FC" : "Alliance FC");
+                         //bot->Say(out.str(), LANG_UNIVERSAL);
+                     }
+-                    else
++                    else if (!BgTeamHasRealPlayer(bg, bot->GetTeam()))
+                     {
++                        // No real player in this match at all (solo/testing
++                        // against an all-bot team) - go fetch the enemy flag
++                        // like before 2026-07-27, since otherwise the enemy
++                        // team never even tries to cap and a human always
++                        // wins trivially.
+                         if (bot->GetTeam() == ALLIANCE)
+                             pos.Set(WS_FLAG_POS_HORDE.x, WS_FLAG_POS_HORDE.y, WS_FLAG_POS_HORDE.z, bot->GetMapId());
+                         else
+                             pos.Set(WS_FLAG_POS_ALLIANCE.x, WS_FLAG_POS_ALLIANCE.y, WS_FLAG_POS_ALLIANCE.z, bot->GetMapId());
+-
+-                        //ostringstream out;
+-                        //out << "Going to " << (bot->GetTeam() == ALLIANCE ? "take Horde flag" : "take Alliance flag");
+-                        //bot->Say(out.str(), LANG_UNIVERSAL);
++                    }
++                    else
++                    {
++                        // Was: proactively head to the enemy flag spawn to go
++                        // grab it. Disabled on request (2026-07-27) - bots
++                        // should defend/return flags but not actively go
++                        // fetch the enemy one themselves in a real match with
++                        // a human opponent present. Patrol instead.
++                        float rx, ry, rz;
++                        bot->GetRandomPoint(1227.446f, 1476.235f, 307.484f, 150.0f, rx, ry, rz);
++                        pos.Set(rx, ry, rz, bot->GetMapId());
+                     }
+                 }
+             }
+@@ -3093,28 +3119,25 @@ bool BGTactics::selectObjective(bool reset)
+                     //out << "Attacking " << (bot->GetTeam() == ALLIANCE ? "Horde FC" : "Alliance FC");
+                     //bot->Say(out.str(), LANG_UNIVERSAL);
+                 }
+-                else
++                else if (!BgTeamHasRealPlayer(bg, bot->GetTeam()))
+                 {
+-                    if (role > 9)  // test patrol
+-                    {
+-                        float rx, ry, rz;
+-                        bot->GetRandomPoint(1227.446f, 1476.235f, 307.484f, 150.0f, rx, ry, rz);
+-                        pos.Set(rx, ry, rz, bot->GetMapId());
+-                        //ostringstream out;
+-                        //out << "Patrolling battlefield";
+-                        //bot->Say(out.str(), LANG_UNIVERSAL);
+-                    }
++                    // Same as the supporter branch above - fetch the enemy
++                    // flag when there's no real player in the match at all.
++                    if (bot->GetTeam() == ALLIANCE)
++                        pos.Set(WS_FLAG_POS_HORDE.x, WS_FLAG_POS_HORDE.y, WS_FLAG_POS_HORDE.z, bot->GetMapId());
+                     else
+-                    {
+-                        if (bot->GetTeam() == ALLIANCE)
+-                            pos.Set(WS_FLAG_POS_HORDE.x, WS_FLAG_POS_HORDE.y, WS_FLAG_POS_HORDE.z, bot->GetMapId());
+-                        else
+-                            pos.Set(WS_FLAG_POS_ALLIANCE.x, WS_FLAG_POS_ALLIANCE.y, WS_FLAG_POS_ALLIANCE.z, bot->GetMapId());
+-
+-                        //ostringstream out;
+-                        //out << "Going to " << (bot->GetTeam() == ALLIANCE ? "take Horde flag" : "take Alliance flag");
+-                        //bot->Say(out.str(), LANG_UNIVERSAL);
+-                    }
++                        pos.Set(WS_FLAG_POS_ALLIANCE.x, WS_FLAG_POS_ALLIANCE.y, WS_FLAG_POS_ALLIANCE.z, bot->GetMapId());
++                }
++                else
++                {
++                    // Was: patrol only if role>9, otherwise proactively go
++                    // grab the enemy flag. Now always patrols when a real
++                    // player is present - see the "supporter" branch above
++                    // for why the offensive flag-fetch was removed
++                    // (2026-07-27).
++                    float rx, ry, rz;
++                    bot->GetRandomPoint(1227.446f, 1476.235f, 307.484f, 150.0f, rx, ry, rz);
++                    pos.Set(rx, ry, rz, bot->GetMapId());
+                 }
+             }
+         }
 diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTargetActions.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTargetActions.cpp
 index 2a27fc0..ced9afe 100644
 --- a/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTargetActions.cpp

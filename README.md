@@ -17,14 +17,12 @@ final state.
 
 | Patch | What it does | Extra steps |
 |---|---|---|
-| [`0001`](patches/0001-Add-zone-restricted-world-buffs-and-automatic-donati.patch) **World buffs + donation points** | Periodic world buffs, restricted by zone and faction: Spirit of Zandalar (Stranglethorn Vale), Warchief's Blessing (Horde, Crossroads/Orgrimmar), Rallying Cry of the Dragonslayer (Alliance in Stormwind, Horde in Orgrimmar). Each buff runs on its own timer so they don't all fire at once, with a shorter first interval after a restart. Plus `AutoDonationPoints`: real players (bots and the Discord bridge excluded) earn shop currency per hour online, persisted across restarts. | config + SQL |
+| [`0001`](patches/0001-Add-world-buffs-automatic-donation-points-and-fix-th.patch) **World buffs, donation points, shop fix** | Periodic world buffs, restricted by zone and faction: Spirit of Zandalar (Stranglethorn Vale), Warchief's Blessing (Horde, Crossroads/Orgrimmar), Rallying Cry of the Dragonslayer (Alliance in Stormwind, Horde in Orgrimmar). Each buff runs on its own timer so they don't all fire at once, with a shorter first interval after a restart. Plus `AutoDonationPoints`: real players (bots and the Discord bridge excluded) earn shop currency per hour online, persisted across restarts. Also fixes the Donation Rewards window showing only the "About" tab — the client expects a `parentId` field the server never sent, which threw a Lua error that aborted category parsing on the first entry. | config + SQL |
 | [`0002`](patches/0002-Auto-join-new-low-level-players-into-the-configured-.patch) **Beginners guild** | Auto-joins new, guildless real players (level ≤ 5) into a configured welcome guild on first login. | config |
-| [`0003`](patches/0003-Fix-playerbot-battleground-queueing-and-make-bots-ac.patch) **BG queueing + bots actually fight** | Fixes playerbots silently failing to queue for battlegrounds at all (their join packet was never processed), and three separate reasons bots never fought: the attack trigger was only wired into the combat engine an idle bot never entered, the target list only ever saw units already attacking them, and the flag-carrier attack check tested the wrong unit's aura. Also adds a 20-minute hard match cutoff. | – |
-| [`0004`](patches/0004-Fix-WSG-flag-carrier-freeze-and-rework-proactive-fla.patch) **WSG flag-carrier behaviour** | Fixes flag carriers freezing forever mid-map when both flags are out. Bots no longer fetch the enemy flag on their own initiative — unless their own team has no real players, so solo-vs-bots matches aren't a walkover. | – |
-| [`0005`](patches/0005-Fix-WSG-and-AB-graveyard-resurrection-using-stale-va.patch) **BG graveyard resurrection** ⚠️ | Fixes "Release Spirit" leaving you stuck at your corpse in WSG/AB instead of teleporting to a graveyard. **Environment-specific — read below before applying.** | – |
-| [`0006`](patches/0006-Fix-donation-shop-showing-no-categories-missing-pare.patch) **Donation shop categories** | Fixes the Donation Rewards window showing only the "About" tab and no categories. The client expects a `parentId` (subcategory) field the server never sent, which threw a Lua error that aborted category parsing on the first entry. | – |
+| [`0003`](patches/0003-Fix-playerbot-battlegrounds-queueing-combat-and-flag.patch) **Playerbot battlegrounds** | Fixes playerbots silently failing to queue for battlegrounds at all (their join packet was never processed); three separate reasons they never fought (attack trigger only wired into a combat engine idle bots never entered, target list only ever saw units already attacking them, flag-carrier attack check tested the wrong unit's aura); and flag carriers freezing forever mid-map. Bots no longer fetch the enemy flag on their own initiative — unless their own team has no real players, so solo-vs-bots matches aren't a walkover. Adds a 20-minute hard match cutoff. | – |
+| [`0004`](patches/0004-Fix-WSG-and-AB-graveyard-resurrection-using-stale-va.patch) **BG graveyard resurrection** ⚠️ | Fixes "Release Spirit" leaving you stuck at your corpse in WSG/AB instead of teleporting to a graveyard. **Environment-specific — read below before applying.** | – |
 
-### ⚠️ About patch 0005
+### ⚠️ About patch 0004
 
 Both battlegrounds hardcode the standard vanilla `WorldSafeLocs.dbc`
 graveyard IDs. On this server's DBC (extracted from a Turtle WoW 1.18
@@ -56,7 +54,7 @@ If both report `True`, skip this patch.
 
 ```bash
 cd /path/to/tortoise-playerbots
-git am /path/to/0001-Add-zone-restricted-world-buffs-and-automatic-donati.patch
+git am /path/to/0001-Add-world-buffs-automatic-donation-points-and-fix-th.patch
 # ... repeat for whichever others you want, in ascending order
 ```
 
