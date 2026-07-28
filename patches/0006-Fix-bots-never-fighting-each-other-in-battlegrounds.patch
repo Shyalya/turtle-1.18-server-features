@@ -1,7 +1,7 @@
 From 2a7e8c90fe13f9f0fb3fbdd5d16ccdb3f7e49cd7 Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
 Date: Mon, 27 Jul 2026 11:48:59 +0100
-Subject: [PATCH 6/7] Fix bots never fighting each other in battlegrounds
+Subject: [PATCH 6/8] Fix bots never fighting each other in battlegrounds
 
 The +pvp strategy's 'enemy player near' -> 'attack enemy player' trigger
 was only wired into the combat engine (InitCombatTriggers), but an idle

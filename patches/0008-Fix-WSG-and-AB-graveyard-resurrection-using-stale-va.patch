@@ -1,0 +1,95 @@
+From a8fb5d2bd758d0ba6e374e6096986da6a599388a Mon Sep 17 00:00:00 2001
+From: shyalya <shyalya@turtle-server.local>
+Date: Tue, 28 Jul 2026 07:06:48 +0100
+Subject: [PATCH 8/8] Fix WSG and AB graveyard resurrection using stale vanilla
+ WorldSafeLocs IDs
+
+Every death in Warsong Gulch and Arathi Basin left the player stuck at their corpse instead of teleporting to a graveyard on "Release Spirit" - confirmed live via debug logging that BattleGroundWS/AB::GetClosestGraveYard() returned NULL 100% of the time for every player and bot.
+
+Root cause: both battlegrounds hardcode the standard vanilla WorldSafeLocs.dbc IDs (769-772 for WSG, 889/890/893-899 for AB), but this server's WorldSafeLocs.dbc (extracted from the Turtle WoW 1.18 client) only has 174 entries total and doesn't include any of them. Confirmed the same graveyard locations exist under different IDs by cross-referencing map_id=489/529 DBC entries' coordinates against known base positions (WSG) and the game's own BG_AB_BuffPositions reference coordinates (AB, unambiguous nearest-match per node).
+
+WSG: 769->97, 770->98, 771->99, 772->100
+AB: 889->113, 890->114, node array {895,894,893,897,896,898,899} -> {119,118,117,121,120,122,123}
+---
+ src/game/Battlegrounds/BattleGroundAB.cpp |  7 ++++++-
+ src/game/Battlegrounds/BattleGroundAB.h   | 13 ++++++++++++-
+ src/game/Battlegrounds/BattleGroundWS.h   | 17 +++++++++++++----
+ 3 files changed, 31 insertions(+), 6 deletions(-)
+
+diff --git a/src/game/Battlegrounds/BattleGroundAB.cpp b/src/game/Battlegrounds/BattleGroundAB.cpp
+index cfcdaed..880961c 100644
+--- a/src/game/Battlegrounds/BattleGroundAB.cpp
++++ b/src/game/Battlegrounds/BattleGroundAB.cpp
+@@ -533,9 +533,14 @@ void BattleGroundAB::EndBattleGround(Team winner)
+ WorldSafeLocsEntry const* BattleGroundAB::GetClosestGraveYard(Player* player)
+ {
+     // repop players at the entrance GY if BG is not started yet
++    // IDs 889/890 are standard vanilla WorldSafeLocs.dbc IDs, but this
++    // server's DBC (Turtle WoW 1.18 client, only 174 entries total) doesn't
++    // have them - confirmed live 2026-07-27/28, same root cause as the WSG
++    // graveyard fix. Real entries exist under IDs 113 (Horde)/114 (Alliance),
++    // found by matching map_id=529 coordinates against the two base corners.
+     if (GetStatus() != STATUS_IN_PROGRESS && !player->IsGameMaster())
+     {
+-        if (WorldSafeLocsEntry const* gEntry = sWorldSafeLocsStore.LookupEntry(player->GetTeam() == ALLIANCE ? 890 : 889))
++        if (WorldSafeLocsEntry const* gEntry = sWorldSafeLocsStore.LookupEntry(player->GetTeam() == ALLIANCE ? 114 : 113))
+             return gEntry;
+     }
+ 
+diff --git a/src/game/Battlegrounds/BattleGroundAB.h b/src/game/Battlegrounds/BattleGroundAB.h
+index 12e7240..8ceb399 100644
+--- a/src/game/Battlegrounds/BattleGroundAB.h
++++ b/src/game/Battlegrounds/BattleGroundAB.h
+@@ -165,7 +165,18 @@ const uint32 BG_AB_PerTickHonor[MAX_BATTLEGROUND_BRACKETS] = {10, 10, 10, 41, 68
+ const uint32 BG_AB_WinMatchHonor[MAX_BATTLEGROUND_BRACKETS] = {10, 10, 10, 41, 68, 113, 189, 198};
+ 
+ // WorldSafeLocs ids for 5 nodes, and for ally, and horde starting location
+-const uint32 BG_AB_GraveyardIds[7] = {895, 894, 893, 897, 896, 898, 899};
++// Was {895, 894, 893, 897, 896, 898, 899} (standard vanilla WorldSafeLocs.dbc
++// IDs) - this server's DBC (Turtle WoW 1.18 client, only 174 entries total)
++// doesn't have any of them, so every AB death fell back to "stay at your
++// corpse" (confirmed live 2026-07-27/28, same root cause as the WSG fix).
++// Real entries exist under different IDs - identified unambiguously by
++// matching each map_id=529 DBC entry's coordinates against
++// BG_AB_BuffPositions below (each graveyard sits ~30-70 units from its
++// node's buff spot, no ambiguity): Stables=119, Blacksmith=118, Farm=117,
++// LumberMill=121, GoldMine=120. The last two slots (Alliance/Horde
++// fallback graveyard used when a team holds zero nodes) are the two
++// leftover entries near each team's base corner (see also 113/114 above).
++const uint32 BG_AB_GraveyardIds[7] = {119, 118, 117, 121, 120, 122, 123};
+ 
+ // x, y, z, o
+ // Nostalrius: Modified to retail 5.4.8 positions.
+diff --git a/src/game/Battlegrounds/BattleGroundWS.h b/src/game/Battlegrounds/BattleGroundWS.h
+index a5ab791..58e1745 100644
+--- a/src/game/Battlegrounds/BattleGroundWS.h
++++ b/src/game/Battlegrounds/BattleGroundWS.h
+@@ -67,12 +67,21 @@ enum BG_WS_FlagState
+     BG_WS_FLAG_STATE_ON_GROUND    = 3
+ };
+ 
++// IDs 769-772 are the standard vanilla WorldSafeLocs.dbc IDs for these
++// graveyards, but this server's WorldSafeLocs.dbc (extracted from the
++// Turtle WoW 1.18 client) only has 174 entries total and doesn't include
++// them at all - sWorldSafeLocsStore.LookupEntry() silently returned NULL
++// for every single WSG death, confirmed live 2026-07-27/28 (players stuck
++// at their corpse instead of teleporting to the graveyard on release
++// spirit). The same graveyard locations DO exist in this DBC, just under
++// different IDs (97-100) - matched by cross-referencing map_id=489 entries'
++// coordinates against the known Alliance/Horde base positions.
+ enum BG_WS_Graveyards
+ {
+-    WS_GRAVEYARD_FLAGROOM_ALLIANCE = 769,
+-    WS_GRAVEYARD_FLAGROOM_HORDE    = 770,
+-    WS_GRAVEYARD_MAIN_ALLIANCE     = 771,
+-    WS_GRAVEYARD_MAIN_HORDE        = 772
++    WS_GRAVEYARD_FLAGROOM_ALLIANCE = 97,
++    WS_GRAVEYARD_FLAGROOM_HORDE    = 98,
++    WS_GRAVEYARD_MAIN_ALLIANCE     = 99,
++    WS_GRAVEYARD_MAIN_HORDE        = 100
+ };
+ 
+ // Nostalrius
+-- 
+2.47.3
+

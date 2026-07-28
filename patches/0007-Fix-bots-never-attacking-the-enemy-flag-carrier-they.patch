@@ -1,7 +1,7 @@
 From c691727b90b308fee55c3329f547255ecbf58afc Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
 Date: Mon, 27 Jul 2026 12:52:38 +0100
-Subject: [PATCH 7/7] Fix bots never attacking the enemy flag carrier they're
+Subject: [PATCH 7/8] Fix bots never attacking the enemy flag carrier they're
  chasing
 
 AttackEnemyFlagCarrierAction::isUseful() checked bot->HasAura(23333/23335/34976) - the "am I personally carrying a flag" check, used correctly one function above in DpsAssistAction::isUseful() ("if carry flag, do not start fight") - but it was copy-pasted here unchanged. Requiring the ATTACKING bot to already be a flag carrier meant this action was nearly always false for a normal bot chasing the enemy flag carrier, since regular chasers don't carry a flag themselves. Confirmed live: bots chased flag carriers relentlessly but never actually attacked once they caught up. Fixed to check the aura on the TARGET instead.
