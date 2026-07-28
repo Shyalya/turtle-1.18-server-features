@@ -1,8 +1,8 @@
-From a8fb5d2bd758d0ba6e374e6096986da6a599388a Mon Sep 17 00:00:00 2001
+From 028e6f0f27aa46722900c3cba6eb18f05304c831 Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
-Date: Tue, 28 Jul 2026 07:06:48 +0100
-Subject: [PATCH 08/10] Fix WSG and AB graveyard resurrection using stale
- vanilla WorldSafeLocs IDs
+Date: Tue, 28 Jul 2026 10:02:58 +0100
+Subject: [PATCH 5/6] Fix WSG and AB graveyard resurrection using stale vanilla
+ WorldSafeLocs IDs
 
 Every death in Warsong Gulch and Arathi Basin left the player stuck at their corpse instead of teleporting to a graveyard on "Release Spirit" - confirmed live via debug logging that BattleGroundWS/AB::GetClosestGraveYard() returned NULL 100% of the time for every player and bot.
 
@@ -10,6 +10,8 @@ Root cause: both battlegrounds hardcode the standard vanilla WorldSafeLocs.dbc I
 
 WSG: 769->97, 770->98, 771->99, 772->100
 AB: 889->113, 890->114, node array {895,894,893,897,896,898,899} -> {119,118,117,121,120,122,123}
+
+NOTE: these replacement IDs are specific to a WorldSafeLocs.dbc that is missing the standard entries in this exact way. Verify against your own DBC before applying - if GetClosestGraveYard() already works for you, do not apply this.
 ---
  src/game/Battlegrounds/BattleGroundAB.cpp |  7 ++++++-
  src/game/Battlegrounds/BattleGroundAB.h   | 13 ++++++++++++-

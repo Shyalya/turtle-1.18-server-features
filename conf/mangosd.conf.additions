@@ -1,0 +1,70 @@
+# Config keys added by these patches. Append the blocks you need to your
+# mangosd.conf. Every key falls back to the default shown here if omitted,
+# EXCEPT the two *.Enable switches - those default to 0, so without them the
+# corresponding feature stays off entirely.
+
+###################################################################################################
+# AUTO WORLD BUFF (patch 0001)
+#
+#    AutoWorldBuff.Enable
+#        Periodically applies world buffs to real online players (bots and the
+#        Discord bridge excluded):
+#          - Spirit of Zandalar               anyone in Stranglethorn Vale
+#          - Warchief's Blessing              Horde only, in Crossroads or Orgrimmar
+#          - Rallying Cry of the Dragonslayer Alliance in Stormwind City,
+#                                             Horde in Orgrimmar
+#        Each buff has its own independent timer, so they do not all fire at once.
+#    AutoWorldBuff.FirstMinInterval / FirstMaxInterval (ms)
+#        Range for the FIRST roll after a (re)start. Kept short so that frequent
+#        restarts do not delay the buffs by a full interval every time.
+#        Default 600000 (10min) - 7200000 (2h).
+#    AutoWorldBuff.MinInterval / MaxInterval (ms)
+#        Range for every roll after the first, i.e. while the server keeps running.
+#        Default 3600000 (1h) - 10800000 (3h).
+#    AutoWorldBuff.WarningInterval (ms)
+#        How long before each refresh the announcement is sent. Default 600000 (10min).
+#
+AutoWorldBuff.Enable = 1
+AutoWorldBuff.FirstMinInterval = 600000
+AutoWorldBuff.FirstMaxInterval = 7200000
+AutoWorldBuff.MinInterval = 3600000
+AutoWorldBuff.MaxInterval = 10800000
+AutoWorldBuff.WarningInterval = 600000
+
+###################################################################################################
+# AUTO DONATION POINTS (patch 0001)
+#
+#    Requires the `donation_point_progress` table - see sql/donation_point_progress.sql.
+#
+#    AutoDonationPoints.Enable
+#        Grants donation points (shop_coins) to real online players (bots and the
+#        Discord bridge excluded) for time spent online. Tracked per account, so
+#        it does not matter when someone logs in.
+#    AutoDonationPoints.IntervalMs
+#        How much online time earns one payout. Default 3600000 (1h).
+#    AutoDonationPoints.Amount
+#        How many points per payout. Default 1.
+#    AutoDonationPoints.FlushIntervalMs
+#        How often accumulated progress is written to the database. Progress
+#        survives restarts; at worst the last <FlushIntervalMs> is lost.
+#        Default 300000 (5min).
+#
+AutoDonationPoints.Enable = 1
+AutoDonationPoints.IntervalMs = 3600000
+AutoDonationPoints.Amount = 1
+AutoDonationPoints.FlushIntervalMs = 300000
+
+###################################################################################################
+# BEGINNERS GUILD (patch 0002)
+#
+#    BeginnersGuilds
+#        Auto-joins new, guildless real players of level 5 or below into a
+#        welcome guild on first login.
+#    BeginnersGuildHorde / BeginnersGuildAlliance
+#        guildid of the guild to join per faction. Create the guilds first
+#        (e.g. in-game via .guild create) and put their ids here - a value of 0
+#        or a non-existent guild id simply disables it for that faction.
+#
+BeginnersGuilds = 1
+BeginnersGuildHorde = 0
+BeginnersGuildAlliance = 0

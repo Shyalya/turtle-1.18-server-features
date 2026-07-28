@@ -1,0 +1,272 @@
+From 91d35f4ec2c2919e974c90797c3b68ba975d168d Mon Sep 17 00:00:00 2001
+From: shyalya <shyalya@turtle-server.local>
+Date: Tue, 28 Jul 2026 10:02:07 +0100
+Subject: [PATCH 3/6] Fix playerbot battleground queueing and make bots
+ actually fight
+
+Queueing:
+- Bots queuing for a BG now go through the opcode handler directly instead of ai->QueuePacket() - bot sessions are never registered in sWorld.m_sessions, so World::UpdateSessions() never drained their recvQueue and the join packet silently vanished forever.
+- Falls back to a server-accepted dummy battlemaster guid (1337) when no physical Battlemaster NPC is loaded nearby, instead of requiring one.
+- WSG/AB matches now have a 20-minute hard cutoff (winner = whoever's ahead on points/flags) so bot-heavy matches that never cap objectives don't run forever.
+
+Combat engagement (previously bots only ever fought back when a human player directly attacked them - never proactively, and never assisting each other):
+- The +pvp strategy's "enemy player near" trigger was only wired into the combat engine, which an idle bot never entered on its own - now also registered for the non-combat engine and applied to both engines on BG entry.
+- The underlying "enemy player targets" list was built exclusively from "attackers" (units already in an active threat relationship), so an idle enemy who hadn't attacked anyone was invisible to this whole detection chain. Now falls back to "possible targets" (a genuine proximity scan, no threat-table dependency) when in a battleground.
+- AttackEnemyFlagCarrierAction::isUseful() checked the wrong unit's aura (a copy-paste bug from a neighboring function), requiring the *attacking* bot to already be a flag carrier itself instead of checking the *target* - bots chased flag carriers forever without ever attacking once they caught up.
+---
+ src/game/Battlegrounds/BattleGround.cpp       | 10 ++++
+ .../actions/BattleGroundJoinAction.cpp        | 49 ++++++++++++++-----
+ .../strategy/actions/ChooseTargetActions.cpp  | 12 ++++-
+ .../generic/AttackEnemyPlayersStrategy.cpp    |  7 +++
+ .../generic/AttackEnemyPlayersStrategy.h      | 12 +++++
+ .../strategy/values/EnemyPlayerValue.cpp      | 21 ++++++++
+ 6 files changed, 98 insertions(+), 13 deletions(-)
+
+diff --git a/src/game/Battlegrounds/BattleGround.cpp b/src/game/Battlegrounds/BattleGround.cpp
+index 70cc1f2..33a13ac 100644
+--- a/src/game/Battlegrounds/BattleGround.cpp
++++ b/src/game/Battlegrounds/BattleGround.cpp
+@@ -312,6 +312,16 @@ void BattleGround::Update(uint32 diff)
+     /***           BATTLEGROUND BALLANCE SYSTEM            ***/
+     /*********************************************************/
+ 
++    // Custom: hard time limit for WSG/AB so bot-heavy matches that never cap flags/nodes
++    // (bots standing around instead of fighting) don't run forever. Whoever leads on
++    // points/flags when the clock runs out wins, same resolution as premature-finish.
++    if (!IsArena() && GetStatus() == STATUS_IN_PROGRESS &&
++        (GetTypeID() == BATTLEGROUND_WS || GetTypeID() == BATTLEGROUND_AB) &&
++        m_StartTime > 20 * MINUTE * IN_MILLISECONDS)
++    {
++        EndBattleGround(GetWinningTeam());
++    }
++
+     // if less then minimum players are in on one side, then start premature finish timer
+     if (!IsArena() && GetStatus() == STATUS_IN_PROGRESS && sBattleGroundMgr.GetPrematureFinishTime() && (GetPlayersCountByTeam(ALLIANCE) < GetMinPlayersPerTeam() || GetPlayersCountByTeam(HORDE) < GetMinPlayersPerTeam()))
+     {
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundJoinAction.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundJoinAction.cpp
+index 4ec0a27..58f12f6 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundJoinAction.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/BattleGroundJoinAction.cpp
+@@ -45,7 +45,9 @@ bool BGJoinAction::Execute(Event& event)
+     if (!queueType) // force join to fill bg
+     {
+         if (bgList.empty())
++        {
+             return false;
++        }
+ 
+         BattleGroundQueueTypeId queueTypeId = (BattleGroundQueueTypeId)bgList[urand(0, bgList.size() - 1)];
+         BattleGroundTypeId bgTypeId = sServerFacade.BgTemplateId(queueTypeId);
+@@ -137,7 +139,8 @@ bool BGJoinAction::Execute(Event& event)
+         sPlayerbotAIConfig.logEvent(ai, "BGJoinAction", _bgType, std::to_string(queueTypeId));
+     }
+ 
+-   return JoinQueue(queueType);
++   bool joinResult = JoinQueue(queueType);
++   return joinResult;
+ }
+ 
+ #ifndef MANGOSBOT_ZERO
+@@ -665,11 +668,13 @@ bool BGJoinAction::JoinQueue(uint32 type)
+     uint32 TeamId = GetTeamIndexByTeamId(bot->GetTeam());
+ 
+     // check if already in queue
+-    if (bot->InBattleGroundQueueForBattleGroundQueueType(queueTypeId))
++    bool alreadyQueued = bot->InBattleGroundQueueForBattleGroundQueueType(queueTypeId);
++    bool hasAccess = bot->GetBGAccessByLevel(bgTypeId);
++    if (alreadyQueued)
+         return false;
+ 
+     // check bg req level
+-    if (!bot->GetBGAccessByLevel(bgTypeId))
++    if (!hasAccess)
+         return false;
+ 
+     // get BattleMaster unit
+@@ -714,18 +719,21 @@ bool BGJoinAction::JoinQueue(uint32 type)
+ 
+    // get battlemaster
+    Unit* unit = ai->GetUnit(AI_VALUE2(CreatureDataPair const*, "bg master", bgTypeId));
+-#ifndef MANGOSBOT_TWO
+-   if (!unit)
+-#else
++#ifdef MANGOSBOT_TWO
+    if (!unit && isArena)
+-#endif
+    {
+        sLog.outDetail("Bot %d could not find Battlemaster to join", bot->GetGUIDLow());
+        return false;
+    }
++#endif
++   // Battlemaster NPC may not be loaded/active (bots scattered across the world).
++   // The server itself accepts guid raw value 1337 as a queue-via-command bypass
++   // (see WorldSession::HandleBattlemasterJoinOpcode, queuedviaCommand check) -
++   // use that instead of requiring a physically loaded Battlemaster Unit.
++   ObjectGuid bmFallbackGuid = ObjectGuid(uint64(1337));
+ // in wotlk only arena requires battlemaster guid
+ #ifndef MANGOSBOT_TWO
+-   ObjectGuid guid = unit->GetObjectGuid();
++   ObjectGuid guid = unit ? unit->GetObjectGuid() : bmFallbackGuid;
+ #else
+    ObjectGuid guid = isArena ? unit->GetObjectGuid() : bot->GetObjectGuid();
+ #endif
+@@ -817,7 +825,7 @@ bool BGJoinAction::JoinQueue(uint32 type)
+ 
+    WorldPacket packet(CMSG_BATTLEMASTER_JOIN, 20);
+ #ifdef MANGOSBOT_ZERO
+-   packet << unit->GetObjectGuid() << mapId << instanceId << joinAsGroup;
++   packet << guid << mapId << instanceId << joinAsGroup;
+    sLog.outDetail("Bot #%d %s:%d <%s> queued %s", bot->GetGUIDLow(), bot->GetTeam() == ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName(), _bgType.c_str());
+ #else
+    sLog.outDetail("Bot #%d %s:%d <%s> queued %s %s", bot->GetGUIDLow(), bot->GetTeam() == ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName(), _bgType.c_str(), isRated ? "Rated Arena" : isArena ? "Arena" :
+@@ -835,7 +843,12 @@ bool BGJoinAction::JoinQueue(uint32 type)
+    }
+ #endif
+ 
+-   ai->QueuePacket(packet);
++   // Bot sessions are never registered in sWorld.m_sessions (created directly via
++   // "new WorldSession(...)" in PlayerbotMgr, bypassing sWorld.AddSession()), so
++   // World::UpdateSessions() never drains their recvQueue - ai->QueuePacket() here
++   // would silently vanish forever. Call the opcode handler directly instead,
++   // exactly like the arena branch above already does with HandleBattlemasterJoinArena.
++   bot->GetSession()->HandleBattlemasterJoinOpcode(packet);
+    return true;
+ }
+ 
+@@ -1058,7 +1071,7 @@ bool BGLeaveAction::Execute(Event& event)
+         bot->GetSession()->HandleLeaveBattlefieldOpcode(packet);
+     }
+     else
+-        bot->GetSession()->HandleBattlefieldPortOpcode(packet);
++        bot->GetSession()->HandleBattleFieldPortOpcode(packet);
+ 
+     if (sRandomPlayerbotMgr.IsFreeBot(bot))
+         ai->SetMaster(NULL);
+@@ -1294,6 +1307,7 @@ bool BGStatusAction::Execute(Event& event)
+         if (sRandomPlayerbotMgr.IsFreeBot(bot))
+             ai->SetMaster(NULL);
+ 
++        ai->ChangeStrategy("-pvp", BotState::BOT_STATE_COMBAT);
+         ai->ChangeStrategy("-warsong", BotState::BOT_STATE_COMBAT);
+         ai->ChangeStrategy("-warsong", BotState::BOT_STATE_NON_COMBAT);
+         ai->ChangeStrategy("-arathi", BotState::BOT_STATE_COMBAT);
+@@ -1403,9 +1417,20 @@ bool BGStatusAction::Execute(Event& event)
+             return false;
+         }
+ #endif
+-        bot->GetSession()->HandleBattlefieldPortOpcode(packet);
++        bot->GetSession()->HandleBattleFieldPortOpcode(packet);
+ 
+         ai->ResetStrategies(false);
++        // Bots otherwise only fight back when attacked (assist/dps strategies react to
++        // an existing target) but never seek out enemy players on their own inside a BG.
++        // +pvp wires up the "enemy player near" -> "attack enemy player" trigger. Applied
++        // to BOTH engines (2026-07-27, was combat-only): an idle bot never enters
++        // BOT_STATE_COMBAT on its own just because an enemy is nearby, so the
++        // combat-only version never actually fired between two idle bots - only a
++        // human player's attack (which flips native combat state) could ever trigger
++        // it. AttackEnemyPlayersStrategy::InitNonCombatTriggers now also registers
++        // this trigger so idle bots can proactively start a fight.
++        ai->ChangeStrategy("+pvp", BotState::BOT_STATE_COMBAT);
++        ai->ChangeStrategy("+pvp", BotState::BOT_STATE_NON_COMBAT);
+         context->GetValue<uint32>("bg role")->Set(urand(0, 9));
+         ai::PositionMap& posMap = context->GetValue<ai::PositionMap&>("position")->Get();
+         ai::PositionEntry pos = context->GetValue<ai::PositionMap&>("position")->Get()["bg objective"];
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTargetActions.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTargetActions.cpp
+index 2a27fc0..ced9afe 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTargetActions.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTargetActions.cpp
+@@ -95,7 +95,17 @@ bool AttackEnemyPlayerAction::isUseful()
+ bool AttackEnemyFlagCarrierAction::isUseful()
+ {
+     Unit* target = context->GetValue<Unit*>("enemy flag carrier")->Get();
+-    return target && sServerFacade.IsDistanceLessOrEqualThan(sServerFacade.GetDistance2d(bot, target), 75.0f) && (bot->HasAura(23333) || bot->HasAura(23335) || bot->HasAura(34976));
++    // Was bot->HasAura(...) (2026-07-27, fixed) - that's the "am I personally
++    // carrying a flag" check used correctly one function above in
++    // DpsAssistAction::isUseful() ("if carry flag, do not start fight"), but
++    // it was copy-pasted here unchanged. Requiring the ATTACKING bot to
++    // already be a flag carrier made this action nearly always false for a
++    // normal bot chasing the enemy flag carrier, since regular chasers don't
++    // carry a flag - confirmed live: bots chased flag carriers relentlessly
++    // but never actually attacked once they caught up. The check belongs on
++    // the TARGET (confirming it's genuinely still an active flag carrier),
++    // not on the attacker.
++    return target && sServerFacade.IsDistanceLessOrEqualThan(sServerFacade.GetDistance2d(bot, target), 75.0f) && (target->HasAura(23333) || target->HasAura(23335) || target->HasAura(34976));
+ }
+ 
+ bool SelectNewTargetAction::Execute(Event& event)
+diff --git a/src/modules/PlayerBots/playerbot/strategy/generic/AttackEnemyPlayersStrategy.cpp b/src/modules/PlayerBots/playerbot/strategy/generic/AttackEnemyPlayersStrategy.cpp
+index 6686d4a..603b3b1 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/generic/AttackEnemyPlayersStrategy.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/generic/AttackEnemyPlayersStrategy.cpp
+@@ -5,6 +5,13 @@
+ using namespace ai;
+ 
+ void AttackEnemyPlayersStrategy::InitCombatTriggers(std::list<TriggerNode*> &triggers)
++{
++    triggers.push_back(new TriggerNode(
++        "enemy player near",
++        NextAction::array(0, new NextAction("attack enemy player", ACTION_EMERGENCY), NULL)));
++}
++
++void AttackEnemyPlayersStrategy::InitNonCombatTriggers(std::list<TriggerNode*> &triggers)
+ {
+     triggers.push_back(new TriggerNode(
+         "enemy player near",
+diff --git a/src/modules/PlayerBots/playerbot/strategy/generic/AttackEnemyPlayersStrategy.h b/src/modules/PlayerBots/playerbot/strategy/generic/AttackEnemyPlayersStrategy.h
+index 3742891..d45d932 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/generic/AttackEnemyPlayersStrategy.h
++++ b/src/modules/PlayerBots/playerbot/strategy/generic/AttackEnemyPlayersStrategy.h
+@@ -17,5 +17,17 @@ namespace ai
+ #endif
+     private:
+         void InitCombatTriggers(std::list<TriggerNode*> &triggers) override;
++        // Also registered for non-combat (2026-07-27): an IDLE bot never
++        // transitions into BOT_STATE_COMBAT on its own just because an enemy
++        // player is standing nearby - only the reactive "was attacked" path
++        // (or an explicit attack action) does that. Since this trigger was
++        // previously only wired into the combat engine, two idle enemy bots
++        // standing next to each other in a BG never fought until a human
++        // player attacked one of them first (chicken-and-egg: needed combat
++        // state to check the trigger that starts combat). The action itself
++        // (AttackEnemyPlayerAction -> AttackAction) already transitions the
++        // bot into combat state once it actually attacks, so it's safe to
++        // fire from the non-combat engine too.
++        void InitNonCombatTriggers(std::list<TriggerNode*> &triggers) override;
+     };
+ }
+diff --git a/src/modules/PlayerBots/playerbot/strategy/values/EnemyPlayerValue.cpp b/src/modules/PlayerBots/playerbot/strategy/values/EnemyPlayerValue.cpp
+index a9ffe1b..4d706cf 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/values/EnemyPlayerValue.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/values/EnemyPlayerValue.cpp
+@@ -32,6 +32,27 @@ std::list<ObjectGuid> EnemyPlayersValue::Calculate()
+                 result = AI_VALUE(std::list<ObjectGuid>, "possible attack targets");
+                 ApplyFilter(result, getOne);
+             }
++
++            // "possible attack targets" is built exclusively from "attackers" -
++            // units already in an active combat/threat relationship with the
++            // bot (2026-07-27, confirmed live via debug logging: hasEnemy was
++            // 0 for every bot standing right next to an untouched enemy). That
++            // meant bots never proactively engaged anyone - only native combat
++            // (a human player actually landing a hit) ever created a real
++            // threat entry, so bots only fought back once directly attacked,
++            // and other nearby bots never "assisted" either since this whole
++            // value only ever looked at the bot's OWN attacker list. Falling
++            // back to "possible targets" - a genuine proximity scan
++            // (AnyUnfriendlyUnitInObjectRangeCheck via Cell::VisitAllObjects,
++            // see PossibleTargetsValue.cpp) with no threat-table dependency -
++            // gives bots a real "is anyone hostile nearby" signal. Scoped to
++            // InBattleGround() only so normal world PvE bot behavior against
++            // real players elsewhere doesn't change.
++            if (result.empty() && bot->InBattleGround())
++            {
++                result = AI_VALUE(std::list<ObjectGuid>, "possible targets");
++                ApplyFilter(result, getOne);
++            }
+         }
+     }
+ 
+-- 
+2.47.3
+
