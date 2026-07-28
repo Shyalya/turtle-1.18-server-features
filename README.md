@@ -52,9 +52,13 @@ If both report `True`, skip this patch.
 
 ## Applying
 
+Use `git am -3` rather than a plain `git am` — the `-3` does a real
+three-way merge, which absorbs the line drift you get on a tree that has
+moved on since the base commit. Plain `git am` rejects those outright.
+
 ```bash
 cd /path/to/tortoise-playerbots
-git am /path/to/0001-Add-world-buffs-automatic-donation-points-and-fix-th.patch
+git am -3 /path/to/0001-Add-world-buffs-automatic-donation-points-and-fix-th.patch
 # ... repeat for whichever others you want, in ascending order
 ```
 
@@ -70,14 +74,38 @@ Then, if you applied a patch that needs them:
    cd build && make -j$(nproc) mangosd
    ```
 
-If `git am` fails to apply cleanly (likely if your tree has diverged from
-the base commit), fall back to:
+If a patch still conflicts, resolve the markers by hand, then
+`git add <files> && git am --continue`. To bail out entirely:
+`git am --abort`.
 
-```bash
-git apply --reject /path/to/the.patch   # applies what it can, leaves .rej files
-```
+## Do these apply to a newer tree?
 
-and resolve the rejected hunks by hand.
+Probed by applying the patches onto the fork's `main` branch, which has
+genuinely diverged from the base commit (15 commits of its own, missing 85
+of the playerbots branch):
+
+| Patch | Result on a diverged tree |
+|---|---|
+| 0001 | `World.cpp`/`World.h` apply cleanly. `ChatHandler.cpp` conflicts — **because `main` already carries the same shop fix**, `"=0="` and all; only the comment differs. Take either side. |
+| 0002 | applies cleanly |
+| 0003 | not applicable there — `main` ships no PlayerBots module at all |
+| 0004 | applies cleanly |
+
+So the patches tolerate a fair amount of upstream movement. Two honest
+caveats:
+
+- **Applying cleanly is not the same as still working.** Patch 0003 in
+  particular leans on playerbot internals (`AI_VALUE`, the strategy
+  engines, the `"possible targets"` value). If those get refactored
+  upstream, the patch may apply and then fail to compile — or compile and
+  behave differently.
+- **Patch 0004 is data-dependent, not code-dependent.** It stays wrong on
+  any tree whose `WorldSafeLocs.dbc` has the standard IDs, no matter how
+  cleanly it applies. Run the check above first.
+
+Worth knowing: the shop-category fix in 0001 exists upstream on `main`
+already — it simply never propagated to `playerbots-integration-gh`. If
+your tree descends from a line that has it, that part of 0001 is redundant.
 
 ## License
 
