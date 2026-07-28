@@ -1,7 +1,7 @@
 From c6b0b153aa53a0975fc743fe22229e59bdefc279 Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
 Date: Mon, 27 Jul 2026 11:43:21 +0100
-Subject: [PATCH 5/8] Stop WSG bots from proactively fetching the enemy flag
+Subject: [PATCH 5/9] Stop WSG bots from proactively fetching the enemy flag
 
 Bots still defend (protect their own flag carrier) and chase down an
 enemy who's carrying our flag, but no longer walk to the enemy flag spawn

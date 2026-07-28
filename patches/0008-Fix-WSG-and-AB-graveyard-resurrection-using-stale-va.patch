@@ -1,7 +1,7 @@
 From a8fb5d2bd758d0ba6e374e6096986da6a599388a Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
 Date: Tue, 28 Jul 2026 07:06:48 +0100
-Subject: [PATCH 8/8] Fix WSG and AB graveyard resurrection using stale vanilla
+Subject: [PATCH 8/9] Fix WSG and AB graveyard resurrection using stale vanilla
  WorldSafeLocs IDs
 
 Every death in Warsong Gulch and Arathi Basin left the player stuck at their corpse instead of teleporting to a graveyard on "Release Spirit" - confirmed live via debug logging that BattleGroundWS/AB::GetClosestGraveYard() returned NULL 100% of the time for every player and bot.

@@ -1,7 +1,7 @@
 From 15cb5706e922ef0973102f6de16913240d3d08bd Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
 Date: Mon, 27 Jul 2026 11:10:03 +0100
-Subject: [PATCH 3/8] Auto-join new low-level players into the configured
+Subject: [PATCH 3/9] Auto-join new low-level players into the configured
  beginners guild
 
 Real players (bots excluded) with no guild who are level 5 or below get
