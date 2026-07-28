@@ -1,7 +1,7 @@
 From 3da4b5412c725e568a49d23227fc9e37e46c2d75 Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
 Date: Mon, 27 Jul 2026 11:40:29 +0100
-Subject: [PATCH 4/9] Fix WSG flag carriers freezing forever when both flags
+Subject: [PATCH 04/10] Fix WSG flag carriers freezing forever when both flags
  are out
 
 selectObjective() previously sent a flag carrier to a random 'hiding spot'

@@ -1,8 +1,8 @@
 From 46d628bb1ece98376ae5cf52efda30bf002e09bd Mon Sep 17 00:00:00 2001
 From: shyalya <shyalya@turtle-server.local>
 Date: Tue, 28 Jul 2026 07:24:47 +0100
-Subject: [PATCH 9/9] Let bots fetch the enemy WSG flag when their own team has
- no real player
+Subject: [PATCH 09/10] Let bots fetch the enemy WSG flag when their own team
+ has no real player
 
 Patch 5 disabled bots proactively fetching the enemy flag, which is correct when real players are on both teams (bots should support, not steamroll). But it also meant an all-bot team never even attempts to cap when a human plays solo against bots, making every solo match trivially one-sided in the human's favor.
 
