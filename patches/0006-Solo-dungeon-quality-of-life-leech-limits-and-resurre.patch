@@ -1,0 +1,194 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Wed, 29 Jul 2026 12:45:00 +0200
+Subject: [PATCH 0006] Solo dungeon quality of life: leech limits and resurrect
+ at the instance entrance
+
+Two features aimed at playing a dungeon alone, both off by default.
+
+Leech (an existing upstream feature) healed a share of all damage dealt,
+to every player and in every situation. On a server running ~1000 random
+bots that is both a PvP distortion and a mass buff nobody asked for. Four
+independent switches narrow it down: PvE only, real players only (random
+bots run on RNDBOT accounts), solo only, dungeons only.
+
+SoloDungeonRepopAlive brings a player who dies ALONE in an instance back
+alive instead of making them walk their corpse back - solo there is
+nobody who could resurrect them. With a group present nothing changes,
+since a group can resurrect and this would be a free pass.
+
+The target is the instance ENTRANCE trigger, not a graveyard. Instance
+graveyards sit outside the instance - that is what the corpse run is for
+- so resurrecting at one drops the player out of the dungeon, which is
+the opposite of the intent. Note ResurrectPlayer() does not remove the
+corpse; callers spawn bones themselves, so this does too.
+
+Both need their config keys, see conf/mangosd.conf.additions.
+
+diff --git a/src/game/Objects/Player.cpp b/src/game/Objects/Player.cpp
+index 1f6be05..3b18840 100644
+--- a/src/game/Objects/Player.cpp
++++ b/src/game/Objects/Player.cpp
+@@ -6397,6 +6397,29 @@ void Player::RepopAtGraveyard()
+ 
+     // Special handle for battleground maps
+     uint32 TeleOptions = TELE_TO_NOT_UNSUMMON_PET;
++
++    // Solo dungeon resurrection: a player who dies ALONE inside an instance is
++    // brought back alive just inside the entrance instead of having to walk
++    // back as a ghost - solo there is nobody who could resurrect them.
++    //
++    // The target is the instance ENTRANCE trigger, not a graveyard: instance
++    // graveyards sit outside the instance (that is what the corpse run is for),
++    // so resurrecting at one would drop the player out of the dungeon.
++    //
++    // Deliberately solo only - with a group present someone can resurrect, and
++    // this would be a free pass. Map::IsDungeon() covers raids and excludes
++    // battlegrounds, which are their own map type.
++    if (!IsAlive() && sWorld.getConfig(CONFIG_BOOL_SOLO_DUNGEON_REPOP_ALIVE) &&
++        !GetGroup() && GetMap() && GetMap()->IsDungeon())
++    {
++        if (AreaTriggerTeleport const* entrance = sObjectMgr.GetMapEntranceTrigger(GetMapId()))
++        {
++            ResurrectPlayer(1.0f);
++            SpawnCorpseBones();
++            TeleportTo(entrance->destination, TeleOptions);
++            return;
++        }
++    }
+     if (BattleGround *bg = GetBattleGround())
+     {
+         ClosestGrave = bg->GetClosestGraveYard(this);
+@@ -6419,7 +6442,7 @@ void Player::RepopAtGraveyard()
+         }
+     }
+     else
+-    { 
++    {
+         // If no grave found, stay at the current location
+         // and don't show spirit healer location
+         if (ClosestGrave)
+diff --git a/src/game/Objects/Unit.cpp b/src/game/Objects/Unit.cpp
+index 266fbf0..e2cb65b 100644
+--- a/src/game/Objects/Unit.cpp
++++ b/src/game/Objects/Unit.cpp
+@@ -73,6 +73,7 @@
+ #include <stdarg.h>
+ #include "SuspiciousStatisticMgr.h"
+ #include "PerfStats.h"
++#include "AccountMgr.h"   // Leech restrictions: spotting RNDBOT accounts by name
+ 
+ float baseMoveSpeed[MAX_MOVE_TYPE] =
+ {
+@@ -912,6 +913,45 @@ uint32 Unit::DealDamage(Unit* pVictim, uint32 damage, CleanDamage const* cleanDa
+         Unit* owner = GetOwner();
+         bool isPetHit = owner && owner->GetTypeId() == TYPEID_PLAYER;
+         Player* player = isPetHit ? owner->ToPlayer() : ToPlayer();
++
++        // Restrictions. Without them the leech applies to EVERY player -
++        // including the ~1000 random bots - and in PvP as well, where a flat
++        // heal on damage dealt skews fights. Each restriction can be switched
++        // off on its own; all default to on, so a bare "Leech.Enable = 1"
++        // holds no surprises.
++        if (player)
++        {
++            // Against non-players only (PvE)
++            if (sWorld.getConfig(CONFIG_BOOL_LEECH_PVE_ONLY) && pVictim->IsPlayer())
++                player = nullptr;
++
++            // Solo only (no party, no raid)
++            if (player && sWorld.getConfig(CONFIG_BOOL_LEECH_SOLO_ONLY) && player->GetGroup())
++                player = nullptr;
++
++            // Instances only - levelling out in the open world stays
++            // untouched, the bonus applies where soloing actually gets hard.
++            // Map::IsDungeon() covers dungeons and raids.
++            if (player && sWorld.getConfig(CONFIG_BOOL_LEECH_DUNGEON_ONLY) &&
++                !(player->GetMap() && player->GetMap()->IsDungeon()))
++                player = nullptr;
++
++            // Real players only - random bots run on RNDBOT accounts.
++            // Looked up by account id because bot sessions carry no
++            // account name of their own.
++            if (player && sWorld.getConfig(CONFIG_BOOL_LEECH_REAL_PLAYERS_ONLY))
++            {
++                std::string leechAccName;
++                if (WorldSession* leechSession = player->GetSession())
++                    sAccountMgr.GetName(leechSession->GetAccountId(), leechAccName);
++                for (char& c : leechAccName)
++                    if (c >= 'a' && c <= 'z')
++                        c = c - 'a' + 'A';
++                if (leechAccName.rfind("RNDBOT", 0) == 0)
++                    player = nullptr;
++            }
++        }
++
+         if (player)
+         {
+             float leechAmount = sWorld.getConfig(CONFIG_FLOAT_LEECH_AMOUNT);
+diff --git a/src/game/World.cpp b/src/game/World.cpp
+index 4faa2ce..0d53af2 100644
+--- a/src/game/World.cpp
++++ b/src/game/World.cpp
+@@ -1489,6 +1489,11 @@ void World::LoadConfigSettingsFromFile(bool reload)
+ 
+     setConfig(CONFIG_BOOL_PERFORMANCE_ENABLE, "Perf.Enable", true);
+     setConfig(CONFIG_BOOL_LEECH_ENABLE, "Leech.Enable", false);
++    setConfig(CONFIG_BOOL_LEECH_PVE_ONLY, "Leech.PvEOnly", true);
++    setConfig(CONFIG_BOOL_LEECH_REAL_PLAYERS_ONLY, "Leech.RealPlayersOnly", true);
++    setConfig(CONFIG_BOOL_LEECH_SOLO_ONLY, "Leech.SoloOnly", true);
++    setConfig(CONFIG_BOOL_LEECH_DUNGEON_ONLY, "Leech.DungeonOnly", true);
++    setConfig(CONFIG_BOOL_SOLO_DUNGEON_REPOP_ALIVE, "SoloDungeonRepopAlive.Enable", false);
+ 
+     setConfig(CONFIG_UINT32_PERFORMANCE_REPORT_INTERVAL, "Perf.ReportInterval", 600);
+     setConfig(CONFIG_UINT32_MAX_GOLD_TRANSFERRED, "Transfer.MaxGold", 300000);
+diff --git a/src/game/World.h b/src/game/World.h
+index b5ac292..1293d6c 100644
+--- a/src/game/World.h
++++ b/src/game/World.h
+@@ -721,6 +721,15 @@ enum eConfigBoolValues
+     CONFIG_BOOL_HOLIDAY_EVENT,
+     CONFIG_BOOL_PERFORMANCE_ENABLE,
+     CONFIG_BOOL_LEECH_ENABLE,
++    // Leech restrictions: without them the leech applies to EVERY player,
++    // including the ~1000 random bots, and in PvP too, which skews fights
++    // server wide. See Unit::DealDamage.
++    CONFIG_BOOL_LEECH_PVE_ONLY,
++    CONFIG_BOOL_LEECH_REAL_PLAYERS_ONLY,
++    CONFIG_BOOL_LEECH_SOLO_ONLY,
++    CONFIG_BOOL_LEECH_DUNGEON_ONLY,
++    // Solo dungeon resurrection, see Player::RepopAtGraveyard
++    CONFIG_BOOL_SOLO_DUNGEON_REPOP_ALIVE,
+     CONFIG_BOOL_AUTOSCALER_ENABLE,
+     CONFIG_BOOL_VALUE_COUNT
+ };
+diff --git a/src/mangosd/mangosd.conf.dist.in b/src/mangosd/mangosd.conf.dist.in
+index c42af03..f36a706 100644
+--- a/src/mangosd/mangosd.conf.dist.in
++++ b/src/mangosd/mangosd.conf.dist.in
+@@ -2155,6 +2155,23 @@ Leech.Enable = 0
+ # Sets the percentage of damage to leech
+ Leech.Amount = 0.05
+ 
++# Leech-Eingrenzungen. Ohne diese wirkt der Leech auf jeden Spieler - also auch
++# auf die Random-Bots - und ebenso im PvP.
++#   PvEOnly          nur gegen Nicht-Spieler
++#   RealPlayersOnly  keine Random-Bots (RNDBOT-Accounts)
++#   SoloOnly         nur ohne Gruppe/Raid
++Leech.PvEOnly = 1
++Leech.RealPlayersOnly = 1
++Leech.SoloOnly = 1
++#   DungeonOnly      nur in Instanzen (Dungeons/Raids), nicht in der offenen Welt
++Leech.DungeonOnly = 1
++
++# SoloDungeonRepopAlive. Wer ALLEIN in einer Instanz stirbt, kommt beim
++# Geist-Freilassen lebendig am Instanzeingang an statt den Leichnamslauf machen
++# zu muessen. Sobald eine Gruppe dabei ist, greift es nicht (die kann ja
++# wiederbeleben). Gilt via Map::IsDungeon() auch fuer Raids.
++SoloDungeonRepopAlive.Enable = 0
++
+ # AutoScaler.Enable. Enable or disable instance auto-scaling. 0 = off, 1 = on.
+ AutoScalerEnable = 0
+ 
+-- 
+2.43.0

@@ -68,3 +68,38 @@ AutoDonationPoints.FlushIntervalMs = 300000
 BeginnersGuilds = 1
 BeginnersGuildHorde = 0
 BeginnersGuildAlliance = 0
+
+###############################################################################
+# Patch 0006 - solo dungeon quality of life
+###############################################################################
+
+# Leech already exists upstream: it heals the attacker for a share of the
+# damage they deal. Unrestricted that hits every player - including every
+# random bot - and applies in PvP, where a flat heal on damage skews fights.
+# Each switch below is independent; turn off the ones you do not want.
+#
+#   PvEOnly          no healing when the victim is a player
+#   RealPlayersOnly  no healing for random bots (RNDBOT accounts)
+#   SoloOnly         no healing while in a party or raid
+#   DungeonOnly      no healing out in the open world
+#
+# Note Amount is a fraction of damage dealt, so small hits heal nothing
+# visible: 5% of 15 damage rounds away.
+
+Leech.Enable = 0
+Leech.Amount = 0.05
+Leech.PvEOnly = 1
+Leech.RealPlayersOnly = 1
+Leech.SoloOnly = 1
+Leech.DungeonOnly = 1
+
+# Brings a player who dies ALONE inside an instance back alive just inside the
+# entrance, instead of a corpse run nobody can shortcut for them. Does nothing
+# when the player is in a group - a group can resurrect. Raids included,
+# battlegrounds not (own map type).
+#
+# Needs the instance to have an entrance trigger in areatrigger_teleport,
+# which every dungeon on this server does.
+
+SoloDungeonRepopAlive.Enable = 0
+

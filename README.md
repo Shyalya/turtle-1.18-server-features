@@ -23,6 +23,8 @@ final state.
 | [`0004`](patches/0004-Fix-WSG-and-AB-graveyard-resurrection-using-stale-va.patch) **BG graveyard resurrection** ⚠️ | Fixes "Release Spirit" leaving you stuck at your corpse in WSG/AB instead of teleporting to a graveyard. **Environment-specific — read below before applying.** | – |
 | [`0005`](patches/0005-Keep-playerbots-out-of-enemy-faction-territory.patch) **Bots out of enemy territory** | Three separate routes into enemy settlements: taxi destinations drawn from *every* node when `AllFlightPaths = 1`; rpg triggers walking bots to enemy flight masters they can never use; and travel destinations only faction checked per NPC, never by location, so gather/skin/mine nodes inside enemy towns were fair game. | – |
 
+| [`0006`](patches/0006-Solo-dungeon-quality-of-life-leech-limits-and-resurre.patch) **Solo dungeon quality of life** | Narrows the existing Leech feature down with four independent switches (PvE only, real players only, solo only, dungeons only) so it stops healing 1000 random bots and skewing PvP. Adds `SoloDungeonRepopAlive`: dying alone in an instance brings you back alive just inside the entrance instead of a corpse run. Both default to off. | config |
+
 
 ### Graveyards (SQL + a DBC tool, no patch)
 
@@ -36,12 +38,24 @@ Crossroads and you release straight back into them - which is exactly what
 produced the piles of bones there. Arathi Highlands had one graveyard shared by
 both factions, 170 yards from the Alliance town Refuge Pointe.
 
-[`tools/add_worldsafelocs.py`](tools/add_worldsafelocs.py) restores three
-graveyards the world database references but no shipped DBC contains: 934, 937
-and 950 for the Turtle high elf zones Quel'Thalas, Amani'Alor and Alah'Thalas.
+[`sql/graveyards_dungeons.sql`](sql/graveyards_dungeons.sql) does the same for
+instances. Turtle splits several dungeons into multiple *zones* - the Scarlet
+Monastery wings, three Scholomance zones, five Dire Maul wings, Blackwing Lair,
+six Shadowfang Keep zones - and only the main zone was mapped, so dying in a
+wing left you at your corpse. The wings now inherit their main zone's
+graveyards. It also opens Shadowfang Keep's graveyard to both factions; it was
+Horde only, leaving Alliance with none at all.
+
+[`tools/add_worldsafelocs.py`](tools/add_worldsafelocs.py) restores graveyards
+the world database references, or needs, but no shipped DBC contains. Ids 934,
+937 and 950 for the Turtle high elf zones Quel'Thalas, Amani'Alor and
+Alah'Thalas; ids 960-964 at the entrances of five Turtle-built dungeons
+(Lower Karazhan Halls, Dragonmaw Retreat, Timbermaw Hold, Windhorn Canyon,
+Frostmane Hollow) which had no graveyard anywhere on their map.
 Both the server's `WorldSafeLocs.dbc` and the client copy inside `patch-9.mpq`
-stop at id 174, so those zones silently had no graveyard. The coordinates are
-recovered from `game_tele` (`alahthalasgraveyard`, `amanialorgraveyard`).
+stop at id 174, so those zones silently had no graveyard. Coordinates come from
+`game_tele` for the high elf zones and from `areatrigger_teleport` for the
+dungeons - the latter put you just inside the door.
 Requires a server restart - DBCs are read at startup only.
 
 To find the same class of bug on your own server, watch the startup log for

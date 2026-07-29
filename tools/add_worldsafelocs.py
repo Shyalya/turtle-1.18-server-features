@@ -25,9 +25,19 @@ ZIEL = sys.argv[2] if len(sys.argv) > 2 else 'WorldSafeLocs_neu.dbc'
 
 # id, map, x, y, z, Name
 NEU = [
+    # High elf zones - coordinates recovered from game_tele
+    # ('alahthalasgraveyard', 'amanialorgraveyard')
     (934, 0, 4284.21, -2862.30, 5.13, "Quel'Thalas"),
     (937, 1, 2949.87, 2557.54, 139.18, "Amani'Alor"),
     (950, 0, 4284.21, -2862.30, 5.13, "Alah'Thalas"),
+    # Turtle-built dungeons with no graveyard anywhere on their map.
+    # Coordinates are each instance's entrance from areatrigger_teleport,
+    # i.e. just inside the door. Pair these with sql/graveyards_dungeons.sql.
+    (960, 532, -11104.0, -1999.0, 50.0, "Lower Karazhan Halls"),
+    (961, 816, -6105.0, -3630.0, 242.0, "Dragonmaw Retreat"),
+    (962, 819, -8134.0, -3450.0, 225.0, "Timbermaw Hold"),
+    (963, 820, -8026.0, -3510.0, 158.0, "Windhorn Canyon"),
+    (964, 822, -7523.0, -3589.0, 200.0, "Frostmane Hollow"),
 ]
 
 roh = open(QUELLE, 'rb').read()
