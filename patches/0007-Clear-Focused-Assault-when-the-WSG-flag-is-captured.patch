@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Wed, 29 Jul 2026 13:25:00 +0200
+Subject: [PATCH 0007] Clear Focused Assault when the WSG flag is captured
+
+The flag aura (23333/23335) triggers Focused Assault every 60 seconds via
+its own periodic effect. Each stack adds 10% damage taken, stacks up to
+99, lasts ten minutes and is only removed on a map change - so a carrier
+who scores keeps the whole stacked penalty well into the next round.
+
+Cleared on capture only, never on drop. Clearing it on drop would let a
+carrier reset the stacks by dropping the flag and picking it back up,
+which is precisely what the debuff exists to prevent. The same reasoning
+rules out shortening the ten minute duration: anything close to the 60
+second reapply interval could be waited out the same way.
+
+diff --git a/src/game/Battlegrounds/BattleGroundWS.cpp b/src/game/Battlegrounds/BattleGroundWS.cpp
+index fe0a65d..c564e66 100644
+--- a/src/game/Battlegrounds/BattleGroundWS.cpp
++++ b/src/game/Battlegrounds/BattleGroundWS.cpp
+@@ -194,6 +194,14 @@ void BattleGroundWS::EventPlayerCapturedFlag(Player *Source)
+     Team winner = TEAM_NONE;
+ 
+     Source->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_ENTER_PVP_COMBAT);
++
++    // Clear the anti-stall debuff on a successful capture. The flag aura
++    // reapplies Focused Assault every 60 seconds and each stack lasts ten
++    // minutes, so without this a carrier keeps the stacked damage penalty long
++    // after scoring. Deliberately only on capture, not on drop - clearing it on
++    // drop would let a carrier reset the stacks by dropping the flag and taking
++    // it back up, which is exactly what the debuff exists to prevent.
++    Source->RemoveAurasDueToSpell(BG_WS_SPELL_FOCUSED_ASSAULT);
+     if (Source->GetTeam() == ALLIANCE)
+     {
+         if (!IsHordeFlagPickedup())
+diff --git a/src/game/Battlegrounds/BattleGroundWS.h b/src/game/Battlegrounds/BattleGroundWS.h
+index 58e1745..5b81a18 100644
+--- a/src/game/Battlegrounds/BattleGroundWS.h
++++ b/src/game/Battlegrounds/BattleGroundWS.h
+@@ -44,7 +44,10 @@ enum BG_WS_SpellId
+     BG_WS_SPELL_WARSONG_FLAG            = 23333,
+     BG_WS_SPELL_WARSONG_FLAG_DROPPED    = 23334,
+     BG_WS_SPELL_SILVERWING_FLAG         = 23335,
+-    BG_WS_SPELL_SILVERWING_FLAG_DROPPED = 23336
++    BG_WS_SPELL_SILVERWING_FLAG_DROPPED = 23336,
++    // Stacking +10% damage taken, applied by the flag aura itself every 60s
++    // (23333/23335 effect 3). Cleared on capture, see EventPlayerCapturedFlag.
++    BG_WS_SPELL_FOCUSED_ASSAULT         = 44094
+ };
+ 
+ enum BG_WS_WorldStates
+-- 
+2.43.0

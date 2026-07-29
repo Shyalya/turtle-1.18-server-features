@@ -80,6 +80,8 @@ level bots still take the shorter road through town, which is fine - they
 survive the level 40 guards.
 
 Optional, and specific to this node graph. Check your own node ids first.
+| [`0007`](patches/0007-Clear-Focused-Assault-when-the-WSG-flag-is-captured.patch) **Focused Assault on capture** | The WSG flag aura reapplies Focused Assault every 60s; each stack is +10% damage taken, lasts ten minutes and only clears on a map change, so a carrier who scores keeps the whole penalty into the next round. Now cleared on capture - and only on capture, since clearing it on drop would let a carrier reset the stacks by dropping the flag and taking it back up. | – |
+
 
 ### PvP trinket dropping the flag (SQL only, no patch)
 
