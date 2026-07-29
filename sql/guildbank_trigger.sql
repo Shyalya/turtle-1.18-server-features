@@ -1,0 +1,64 @@
+-- Guild bank: make right-clicking the vault keepers open the bank window.
+--
+-- Apply to the WORLD database. Requires a server restart (see note below).
+--
+-- Symptom
+--   Right-clicking "Teller Plushner" (Alliance, entry 80917) or "Are" (Horde,
+--   entry 80918) opens a plain gossip window ("Greetings <name>") and nothing
+--   else. The guild bank never opens.
+--
+-- Cause
+--   The guild bank UI lives client-side in Turtle_GuildBankUI (patch-8/9). It
+--   listens on GOSSIP_SHOW and checks:
+--
+--       local TRIGGER = "GUILD_BANK_TRIGGER"
+--       ...
+--       if GetGossipText() == TRIGGER and UnitExists("npc") then
+--
+--   So the trigger is the NPC's GREETING TEXT, not its name. Older client
+--   versions matched on the name via GUILD_BANK_NPC_TITLE; that global is gone
+--   in patch-9, which is why renaming the NPCs has no effect. Server-side the
+--   two NPCs ship with gossip_menu_id = 0, so they only ever send the default
+--   greeting and the trigger never matches.
+--
+--   Players never see the string: the addon sets the gossip frame to alpha 0
+--   and hides it in the same handler.
+--
+-- Notes
+--   * No gossip_menu_option row is needed. For creatures, SendPreparedGossip
+--     always ends in SendGossipMenu(textId, guid) — the early return for empty
+--     menus only applies to gameobjects. Verified in game.
+--   * broadcast_text has no reload command, so a full server restart is
+--     required. gossip_menu, npc_text and creature_template would otherwise
+--     reload fine.
+--   * IDs 6320603 and 65000 were free on this server. Change them if they
+--     collide with yours.
+--   * Entries 80917/80918 are Turtle-specific. The server also requires the
+--     player to stand within INTERACTION_DISTANCE of them for any guild bank
+--     action to be accepted.
+
+-- 1. The trigger string itself
+REPLACE INTO `broadcast_text`
+    (`entry`, `male_text`, `female_text`, `chat_type`, `sound_id`, `language_id`)
+VALUES
+    (6320603, 'GUILD_BANK_TRIGGER', 'GUILD_BANK_TRIGGER', 0, 0, 0);
+
+-- 2. npc_text pointing at it
+REPLACE INTO `npc_text` (`ID`, `BroadcastTextID0`, `Probability0`)
+VALUES (6320603, 6320603, 1);
+
+-- 3. A gossip menu carrying that text
+REPLACE INTO `gossip_menu` (`entry`, `text_id`, `script_id`, `condition_id`)
+VALUES (65000, 6320603, 0, 0);
+
+-- 4. Hand it to both vault keepers
+UPDATE `creature_template` SET `gossip_menu_id` = 65000
+WHERE `entry` IN (80917, 80918);
+
+-- Verify: both rows should show trigger_text = GUILD_BANK_TRIGGER
+SELECT ct.`entry`, ct.`name`, ct.`gossip_menu_id`, bt.`male_text` AS trigger_text
+FROM `creature_template` ct
+JOIN `gossip_menu`    gm ON gm.`entry` = ct.`gossip_menu_id`
+JOIN `npc_text`       nt ON nt.`ID`    = gm.`text_id`
+JOIN `broadcast_text` bt ON bt.`entry` = nt.`BroadcastTextID0`
+WHERE ct.`entry` IN (80917, 80918);

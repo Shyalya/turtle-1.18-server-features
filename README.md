@@ -22,6 +22,37 @@ final state.
 | [`0003`](patches/0003-Fix-playerbot-battlegrounds-queueing-combat-and-flag.patch) **Playerbot battlegrounds** | Fixes playerbots silently failing to queue for battlegrounds at all (their join packet was never processed); three separate reasons they never fought (attack trigger only wired into a combat engine idle bots never entered, target list only ever saw units already attacking them, flag-carrier attack check tested the wrong unit's aura); and flag carriers freezing forever mid-map. Bots no longer fetch the enemy flag on their own initiative — unless their own team has no real players, so solo-vs-bots matches aren't a walkover. Adds a 20-minute hard match cutoff. | – |
 | [`0004`](patches/0004-Fix-WSG-and-AB-graveyard-resurrection-using-stale-va.patch) **BG graveyard resurrection** ⚠️ | Fixes "Release Spirit" leaving you stuck at your corpse in WSG/AB instead of teleporting to a graveyard. **Environment-specific — read below before applying.** | – |
 
+### Guild bank trigger (SQL only, no patch)
+
+[`sql/guildbank_trigger.sql`](sql/guildbank_trigger.sql) makes right-clicking
+the guild vault keepers actually open the guild bank. No code change involved —
+it is a pure data fix, independent of every patch above.
+
+The bank UI ships client-side in `Turtle_GuildBankUI` (patch-8/9). It hooks
+`GOSSIP_SHOW` and opens only when the NPC's **greeting text** is exactly
+`GUILD_BANK_TRIGGER`. Older client builds matched the NPC *name* instead, via
+`GUILD_BANK_NPC_TITLE` — that global no longer exists, so renaming the NPCs
+does nothing. Server-side the vault keepers ship with `gossip_menu_id = 0` and
+therefore only ever send the default greeting.
+
+The string is never visible: the addon sets the gossip frame to alpha 0 in the
+same handler.
+
+Two things to know before blaming the trigger:
+
+- The guild bank must be **unlocked** first — 2000 gold, guild master only,
+  standing next to the NPC. Until then the UI opens with no tabs and throws
+  `'for' limit must be a number`.
+- Every guild bank action requires the player to be within
+  `INTERACTION_DISTANCE` of entry 80917 (Alliance) or 80918 (Horde). Out of
+  range, the server drops the request silently.
+
+Per-tab access is set by **right-clicking a tab icon** as guild master. The
+selected rank is the lowest one still allowed. Withdrawing *gold* is separate
+and hardcoded to rank ≤ 1 (guild master and officer).
+
+Requires a server restart: `broadcast_text` has no reload command.
+
 ### ⚠️ About patch 0004
 
 Both battlegrounds hardcode the standard vanilla `WorldSafeLocs.dbc`
@@ -66,6 +97,8 @@ Then, if you applied a patch that needs them:
 
 1. **SQL** — apply [`sql/donation_point_progress.sql`](sql/donation_point_progress.sql)
    to your **login** database (patch 0001 only).
+   [`sql/guildbank_trigger.sql`](sql/guildbank_trigger.sql) goes to the
+   **world** database and belongs to no patch — see above.
 2. **Config** — append the relevant blocks from
    [`conf/mangosd.conf.additions`](conf/mangosd.conf.additions) to your
    `mangosd.conf`. Note the `*.Enable` switches default to **off**.
