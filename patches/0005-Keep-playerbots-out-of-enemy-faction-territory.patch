@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Wed, 29 Jul 2026 12:00:00 +0200
+Subject: [PATCH 0005] Keep playerbots out of enemy faction territory
+
+Three independent ways bots ended up deep inside enemy settlements, all
+found while chasing piles of Alliance corpses around the Horde flight
+master in The Crossroads:
+
+1. Taxi destinations were picked from every node the bot "knows". With
+   AllFlightPaths = 1 (or isTaxiCheater) that is every node in the game,
+   so bots flew into enemy capitals at random. Now a node only counts if
+   it has a mount entry for the bot's own faction - the same test the
+   core uses in ObjectMgr::GetNearestTaxiNode.
+
+2. RpgTaxiTrigger and RpgDiscoverTrigger did not check hostility, so
+   bots walked up to enemy flight masters they could never use. The
+   other rpg triggers in that file already had the check.
+
+3. Travel destinations were only faction checked per NPC, never by
+   location. Neutral faction 35 NPCs are friendly to both sides but some
+   stand inside enemy towns, and gather/skin/mine nodes are not checked
+   at all. Alliance bots crossed the whole Barrens to pick herbs in a
+   Horde town and were killed by the guards. Destinations whose position
+   lies in the enemy faction's home zone are now skipped; contested
+   zones stay open.
+
+Note for anyone reusing the helper in 3: WorldPosition::GetArea() passes
+an area *flag* to AreaEntry::GetById(), which expects an area *id*, and
+returns unrelated areas - a position in the Barrens reported "Silverpine
+Forest". Use AreaEntry::GetByAreaFlagAndMap() instead.
+
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTravelTargetAction.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTravelTargetAction.cpp
+index cd14c0c..12ff8bc 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTravelTargetAction.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTravelTargetAction.cpp
+@@ -321,6 +321,52 @@ inline std::string PrintPartion(uint32 sqPartition)
+     return "> " + std::to_string(prevPartition);
+ }
+ 
++namespace
++{
++    // Is this destination point inside the enemy faction's home territory?
++    //
++    // The existing faction checks only ever look at the destination NPC itself
++    // (RpgTravelDestination::IsActive, GrindTravelDestination::IsActive). That
++    // is not enough: neutral faction 35 NPCs are friendly to both sides, yet
++    // some of them stand in the middle of enemy towns. Gather/skin/mine nodes
++    // are not faction checked at all.
++    //
++    // Observed live: Alliance bots walked across the Barrens into The
++    // Crossroads (a Horde town) to skin gazelles and pick herbs, did not fight
++    // back - a gather node is not a combat target - and were cut down by the
++    // eleven level 40 Horde Guards. After releasing they came straight back,
++    // because the destination was still valid.
++    //
++    // The check sits here rather than in one destination type on purpose: this
++    // is where the real coordinates of the chosen point are available, so it
++    // covers explore, quest, rpg and gather destinations alike.
++    //
++    // Contested zones (team NONE, e.g. Stranglethorn Vale) stay open on
++    // purpose - only territory owned by the other side is blocked.
++    bool IsEnemyHomeZone(WorldPosition const& pos, Team team)
++    {
++        // Do NOT use WorldPosition::GetArea(): it passes an area *flag* to
++        // AreaEntry::GetById(), which expects an area *id*. That returns
++        // unrelated areas - measured live, a position in the Barrens (Kalimdor)
++        // reported "Silverpine Forest" (Eastern Kingdoms).
++        // GetByAreaFlagAndMap resolves flag plus map correctly.
++        AreaEntry const* area = AreaEntry::GetByAreaFlagAndMap(pos.getAreaFlag(), pos.getMapId());
++        if (!area)
++            return false;
++
++        uint32 areaTeam = area->Team;
++
++        // Sub-areas such as "The Crossroads" carry no team of their own and
++        // inherit it from their zone (The Barrens = AREATEAM_HORDE).
++        if (areaTeam == AREATEAM_NONE && area->ZoneId)
++            if (AreaEntry const* zone = AreaEntry::GetById(area->ZoneId))
++                areaTeam = zone->Team;
++
++        return (areaTeam == AREATEAM_ALLY  && team == HORDE)
++            || (areaTeam == AREATEAM_HORDE && team == ALLIANCE);
++    }
++}
++
+ //Sets the target to the best destination.
+ bool ChooseTravelTargetAction::SetBestTarget(Player* requester, TravelTarget* target, PartitionedTravelList& partitionedList, bool onlyActive)
+ {
+@@ -352,6 +398,15 @@ bool ChooseTravelTargetAction::SetBestTarget(Player* requester, TravelTarget* ta
+ 
+             if (target->IsForced() || (isActive[destination] = destination->IsActive(bot, PlayerTravelInfo(bot))))
+             {
++                // Checked after IsActive so the area lookup only happens for
++                // the point that was actually selected.
++                if (!target->IsForced() && position && IsEnemyHomeZone(*position, bot->GetTeam()))
++                {
++                    ai->TellDebug(requester, "Skipping " + destination->GetTitle() + " - enemy home zone", "debug travel");
++
++                    continue;
++                }
++
+                 if (partition != std::prev(partitionedList.end())->first && !urand(0, 10)) //10% chance to skip to a longer partition.
+                 {
+                     ai->TellDebug(requester, "Skipping range " + PrintPartion(partition), "debug travel");
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/RpgSubActions.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/RpgSubActions.cpp
+index e4db5db..1099d3c 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/RpgSubActions.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/RpgSubActions.cpp
+@@ -170,6 +170,20 @@ bool RpgTaxiAction::Execute(Event& event)
+         TaxiPathEntry const* entry = sTaxiPathStore.LookupEntry(i);
+         if (entry && entry->from == node && (bot->m_taxi.IsTaximaskNodeKnown(entry->to) || bot->isTaxiCheater()))
+         {
++            // Only destinations usable by the bot's own faction. Previously
++            // the sole check was whether the flight point is KNOWN - but with
++            // "AllFlightPaths = 1" (or isTaxiCheater) every node counts as
++            // known, including the enemy's. The randomly drawn destination
++            // therefore flew bots straight into enemy towns, where they landed
++            // at the flight master (observed live: Alliance bots in The
++            // Crossroads and Orgrimmar, Horde bots in Stormwind).
++            // A flight point is only usable by a faction if it has a mount
++            // entry for it - the same check the core does in
++            // ObjectMgr::GetNearestTaxiNode.
++            TaxiNodesEntry const* toNode = sObjectMgr.GetTaxiNodeEntry(entry->to);
++            if (!toNode || !toNode->MountCreatureID[bot->GetTeam() == ALLIANCE ? 1 : 0])
++                continue;
++
+             nodes.push_back(i);
+         }
+     }
+diff --git a/src/modules/PlayerBots/playerbot/strategy/triggers/RpgTriggers.cpp b/src/modules/PlayerBots/playerbot/strategy/triggers/RpgTriggers.cpp
+index a809649..675ace7 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/triggers/RpgTriggers.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/triggers/RpgTriggers.cpp
+@@ -33,6 +33,13 @@ bool RpgTaxiTrigger::IsActive()
+     if (!guidP.HasNpcFlag(UNIT_NPC_FLAG_FLIGHTMASTER))
+         return false;
+ 
++    // An enemy flight master cannot be used anyway. Without this check bots
++    // walk up to opposing faction flight masters (observed live: Alliance bots
++    // inside the Horde town of The Crossroads). The other rpg triggers in this
++    // file already perform the same check.
++    if (guidP.IsHostileTo(bot))
++        return false;
++
+     uint32 node = sObjectMgr.GetNearestTaxiNode(guidP.getX(), guidP.getY(), guidP.getZ(), guidP.getMapId(), bot->GetTeam());
+ 
+     if (!node)
+@@ -61,6 +68,11 @@ bool RpgDiscoverTrigger::IsActive()
+     if (!guidP.HasNpcFlag(UNIT_NPC_FLAG_FLIGHTMASTER))
+         return false;
+ 
++    // See RpgTaxiTrigger: the bot can never discover an enemy flight point,
++    // so walking there is wasted time (and leads into enemy settlements).
++    if (guidP.IsHostileTo(bot))
++        return false;
++
+     if (bot->isTaxiCheater())
+         return false;
+ 
+-- 
+2.43.0

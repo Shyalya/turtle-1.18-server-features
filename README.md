@@ -21,6 +21,51 @@ final state.
 | [`0002`](patches/0002-Auto-join-new-low-level-players-into-the-configured-.patch) **Beginners guild** | Auto-joins new, guildless real players (level ≤ 5) into a configured welcome guild on first login. | config |
 | [`0003`](patches/0003-Fix-playerbot-battlegrounds-queueing-combat-and-flag.patch) **Playerbot battlegrounds** | Fixes playerbots silently failing to queue for battlegrounds at all (their join packet was never processed); three separate reasons they never fought (attack trigger only wired into a combat engine idle bots never entered, target list only ever saw units already attacking them, flag-carrier attack check tested the wrong unit's aura); and flag carriers freezing forever mid-map. Bots no longer fetch the enemy flag on their own initiative — unless their own team has no real players, so solo-vs-bots matches aren't a walkover. Adds a 20-minute hard match cutoff. | – |
 | [`0004`](patches/0004-Fix-WSG-and-AB-graveyard-resurrection-using-stale-va.patch) **BG graveyard resurrection** ⚠️ | Fixes "Release Spirit" leaving you stuck at your corpse in WSG/AB instead of teleporting to a graveyard. **Environment-specific — read below before applying.** | – |
+| [`0005`](patches/0005-Keep-playerbots-out-of-enemy-faction-territory.patch) **Bots out of enemy territory** | Three separate routes into enemy settlements: taxi destinations drawn from *every* node when `AllFlightPaths = 1`; rpg triggers walking bots to enemy flight masters they can never use; and travel destinations only faction checked per NPC, never by location, so gather/skin/mine nodes inside enemy towns were fair game. | – |
+
+
+### Graveyards (SQL + a DBC tool, no patch)
+
+Two data defects that make characters - bots *and* real players - die in a loop.
+
+[`sql/graveyards_barrens_arathi.sql`](sql/graveyards_barrens_arathi.sql) fixes
+the mapping. **The Barrens had no graveyard entry at all**; when a zone has
+none, `GetClosestGraveYard` returns nullptr and `RepopAtGraveyard` does not
+teleport, so the ghost appears at its own corpse. Die among the guards in The
+Crossroads and you release straight back into them - which is exactly what
+produced the piles of bones there. Arathi Highlands had one graveyard shared by
+both factions, 170 yards from the Alliance town Refuge Pointe.
+
+[`tools/add_worldsafelocs.py`](tools/add_worldsafelocs.py) restores three
+graveyards the world database references but no shipped DBC contains: 934, 937
+and 950 for the Turtle high elf zones Quel'Thalas, Amani'Alor and Alah'Thalas.
+Both the server's `WorldSafeLocs.dbc` and the client copy inside `patch-9.mpq`
+stop at id 174, so those zones silently had no graveyard. The coordinates are
+recovered from `game_tele` (`alahthalasgraveyard`, `amanialorgraveyard`).
+Requires a server restart - DBCs are read at startup only.
+
+To find the same class of bug on your own server, watch the startup log for
+`has record for not existing graveyard`, and look for zones with no
+`game_graveyard_zone` row at all.
+
+### Playerbot travel nodes (SQL only, no patch)
+
+[`sql/playerbot_bypass_crossroads.sql`](sql/playerbot_bypass_crossroads.sql)
+adds a ground link that routes around The Crossroads instead of through it.
+
+The bot travel graph has three nodes inside that Horde town, one of them
+(`The Crossroads flightMaster`) sitting *on* the flight master, 21 yards from a
+guard. Every ground route across the Barrens went through them. The new link
+between `The Barrens` and `The Barrens spirithealer` keeps at least 84 yards
+from every guard spawn and 90 from every patrol waypoint.
+
+It wins on cost without any code change: the in-town links carry
+`max_creature_2 = 55`, which the existing `factionAnnoyance` turns into roughly
+a 7x penalty for a level 24 Alliance bot, while the bypass carries 0. Higher
+level bots still take the shorter road through town, which is fine - they
+survive the level 40 guards.
+
+Optional, and specific to this node graph. Check your own node ids first.
 
 ### Guild bank trigger (SQL only, no patch)
 
