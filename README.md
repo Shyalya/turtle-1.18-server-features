@@ -81,6 +81,26 @@ survive the level 40 guards.
 
 Optional, and specific to this node graph. Check your own node ids first.
 
+### PvP trinket dropping the flag (SQL only, no patch)
+
+[`sql/pvp_trinket_flag_drop.sql`](sql/pvp_trinket_flag_drop.sql) stops the class
+PvP trinket from dropping the battleground flag.
+
+All class versions cast spell 52317, which dispels crowd control the usual way:
+apply an immunity for 1 ms with `SPELL_ATTR_EX_DISPEL_AURAS_ON_IMMUNITY`, so
+applying it strips matching auras and expires immediately. Besides the mechanic
+mask that covers the entire tooltip, it also applied *physical school* immunity
+- and the flag aura has school 0, counts as negative because of its periodic
+effect, and carries no `SPELL_ATTR_UNAFFECTED_BY_INVULNERABILITY`. So it was
+stripped along with everything else, and removing it fires
+`EventPlayerDroppedFlag`.
+
+Dropping that one effect leaves crowd control removal untouched. Divine Shield
+and Ice Block still drop the flag, as they should - they go through the
+dedicated flag branch instead.
+
+Requires a restart: `spell_template` has no reload command.
+
 ### Guild bank trigger (SQL only, no patch)
 
 [`sql/guildbank_trigger.sql`](sql/guildbank_trigger.sql) makes right-clicking
