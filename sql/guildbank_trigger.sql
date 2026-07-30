@@ -61,10 +61,11 @@ VALUES (65000, 6320603, 0, 0);
 UPDATE `creature_template` SET `gossip_menu_id` = 65000
 WHERE `entry` IN (80917, 80918, 62008, 62009, 62010, 62011, 62012);
 
--- Verify: both rows should show trigger_text = GUILD_BANK_TRIGGER
+-- Verify: every row should show trigger_text = GUILD_BANK_TRIGGER
 SELECT ct.`entry`, ct.`name`, ct.`gossip_menu_id`, bt.`male_text` AS trigger_text
 FROM `creature_template` ct
 JOIN `gossip_menu`    gm ON gm.`entry` = ct.`gossip_menu_id`
 JOIN `npc_text`       nt ON nt.`ID`    = gm.`text_id`
 JOIN `broadcast_text` bt ON bt.`entry` = nt.`BroadcastTextID0`
-WHERE ct.`entry` IN (80917, 80918);
+WHERE ct.`entry` IN (80917, 80918, 62008, 62009, 62010, 62011, 62012)
+ORDER BY ct.`entry`;
