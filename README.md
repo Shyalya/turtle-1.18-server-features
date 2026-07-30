@@ -25,6 +25,8 @@ final state.
 
 | [`0006`](patches/0006-Solo-dungeon-quality-of-life-leech-limits-and-resurre.patch) **Solo dungeon quality of life** | Narrows the existing Leech feature down with four independent switches (PvE only, real players only, solo only, dungeons only) so it stops healing 1000 random bots and skewing PvP. Adds `SoloDungeonRepopAlive`: dying alone in an instance brings you back alive just inside the entrance instead of a corpse run. Both default to off. | config |
 
+| [`0008`](patches/0008-Guild-bank-configurable-vault-keepers.patch) **Guild bank vault keepers** | The guild bank only accepted two hardcoded NPCs, so it worked in Stormwind and Orgrimmar and nowhere else - the decorative keepers Turtle placed in the other capitals were dead ends, and giving them a gossip menu alone would only open a window whose every action the server drops. Now a config list per faction. | config + SQL |
+
 
 ### Graveyards (SQL + a DBC tool, no patch)
 
@@ -131,6 +133,10 @@ Two things to know before blaming the trigger:
 Per-tab access is set by **right-clicking a tab icon** as guild master. The
 selected rank is the lowest one still allowed. Withdrawing *gold* is separate
 and hardcoded to rank ≤ 1 (guild master and officer).
+
+To use the bank outside Stormwind and Orgrimmar you also need patch `0008` and
+its config keys - the SQL alone opens the window but the server still rejects
+every action.
 
 Requires a server restart: `broadcast_text` has no reload command.
 

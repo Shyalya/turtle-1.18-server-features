@@ -51,9 +51,15 @@ VALUES (6320603, 6320603, 1);
 REPLACE INTO `gossip_menu` (`entry`, `text_id`, `script_id`, `condition_id`)
 VALUES (65000, 6320603, 0, 0);
 
--- 4. Hand it to both vault keepers
+-- 4. Hand it to the vault keepers.
+--    80917/80918 are the two that always worked (Stormwind, Orgrimmar).
+--    62008-62012 are the decorative ones Turtle placed next to the banks in
+--    Darnassus, the gnome bank, Ironforge, Thunder Bluff and Undercity. They
+--    additionally need to be listed in GuildBank.NpcEntries* (patch 0008),
+--    otherwise the window opens but every action is dropped by the server's
+--    proximity check.
 UPDATE `creature_template` SET `gossip_menu_id` = 65000
-WHERE `entry` IN (80917, 80918);
+WHERE `entry` IN (80917, 80918, 62008, 62009, 62010, 62011, 62012);
 
 -- Verify: both rows should show trigger_text = GUILD_BANK_TRIGGER
 SELECT ct.`entry`, ct.`name`, ct.`gossip_menu_id`, bt.`male_text` AS trigger_text

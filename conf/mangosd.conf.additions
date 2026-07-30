@@ -103,3 +103,19 @@ Leech.DungeonOnly = 1
 
 SoloDungeonRepopAlive.Enable = 0
 
+###############################################################################
+# Patch 0008 - guild bank vault keepers
+###############################################################################
+
+# Which creatures count as guild vault keepers. A player has to stand next to
+# one of them for guild bank actions to be accepted. The defaults reproduce the
+# old hardcoded pair - Stormwind and Orgrimmar only. Add the decorative keepers
+# Turtle placed in the other capitals to make the bank work there too, and give
+# them a gossip menu via sql/guildbank_trigger.sql.
+#
+#   62008 Faredin (Darnassus), 62009 Lorien (gnome bank), 62011 Golgan (Ironforge)
+#   62010 Gewana (Thunder Bluff), 62012 Arthur (Undercity)
+
+GuildBank.NpcEntriesAlliance = 80917,62008,62009,62011
+GuildBank.NpcEntriesHorde = 80918,62010,62012
+
