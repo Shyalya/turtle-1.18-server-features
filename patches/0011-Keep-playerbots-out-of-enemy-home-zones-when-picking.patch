@@ -1,0 +1,161 @@
+From 26a6620d77f57f6271ec00568acdec5acf521b3e Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Thu, 30 Jul 2026 12:07:13 +0100
+Subject: [PATCH 11/14] Keep playerbots out of enemy home zones when picking
+ targets
+
+Extends the earlier faction filter to travel destinations and random teleports. WorldPosition::isEnemyHomeZoneFor is the shared test; it deliberately avoids GetArea(), which passes an area flag to AreaEntry::GetById() where an area id is expected and reported Barrens positions as Silverpine Forest.
+
+The teleport filter only applies while at least a quarter of the destinations survive it, so a sparse list cannot strand bots.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ .../playerbot/RandomPlayerbotMgr.cpp          | 18 +++++++
+ .../PlayerBots/playerbot/WorldPosition.cpp    | 18 +++++++
+ .../PlayerBots/playerbot/WorldPosition.h      |  5 ++
+ .../actions/ChooseTravelTargetAction.cpp      | 48 +------------------
+ 4 files changed, 42 insertions(+), 47 deletions(-)
+
+diff --git a/src/modules/PlayerBots/playerbot/RandomPlayerbotMgr.cpp b/src/modules/PlayerBots/playerbot/RandomPlayerbotMgr.cpp
+index 5877d6e..e4d956a 100644
+--- a/src/modules/PlayerBots/playerbot/RandomPlayerbotMgr.cpp
++++ b/src/modules/PlayerBots/playerbot/RandomPlayerbotMgr.cpp
+@@ -2452,6 +2452,24 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>
+     //Do not teleport to maps disabled in config
+     tlocs.erase(std::remove_if(tlocs.begin(), tlocs.end(), [](const WorldPosition& l) {std::vector<uint32>::iterator i = find(sPlayerbotAIConfig.randomBotMaps.begin(), sPlayerbotAIConfig.randomBotMaps.end(), l.getMapId()); return i == sPlayerbotAIConfig.randomBotMaps.end(); }), tlocs.end());
+ 
++    // Do not drop bots into the enemy faction's home territory. The teleport
++    // cache (ai_playerbot_tele_cache) only knows level, map and coordinates -
++    // no faction - so an Alliance bot was as likely to land in Durotar as in
++    // Elwynn. There is nothing for it to do there and the city guards kill it
++    // on sight, over and over. Contested zones stay open.
++    // Skipped if it would leave too little to choose from, so a level bracket
++    // that only exists in enemy territory does not strand its bots.
++    {
++        std::vector<WorldPosition> friendly;
++        friendly.reserve(tlocs.size());
++        for (WorldPosition const& loc : tlocs)
++            if (!loc.isEnemyHomeZoneFor(bot->GetTeam()))
++                friendly.push_back(loc);
++
++        if (friendly.size() >= tlocs.size() / 4)
++            tlocs = friendly;
++    }
++
+     //Random shuffle based on distance. Closer distances are more likely (but not exclusively) to be at the begin of the list.
+     tlocs = WorldPosition(bot).GetNextPoint(tlocs, 0);
+ 
+diff --git a/src/modules/PlayerBots/playerbot/WorldPosition.cpp b/src/modules/PlayerBots/playerbot/WorldPosition.cpp
+index dcae264..7f0be51 100644
+--- a/src/modules/PlayerBots/playerbot/WorldPosition.cpp
++++ b/src/modules/PlayerBots/playerbot/WorldPosition.cpp
+@@ -453,6 +453,24 @@ AreaTableEntry const* WorldPosition::GetArea() const
+     return AreaEntry::GetById(getAreaFlag());
+ }
+ 
++bool WorldPosition::isEnemyHomeZoneFor(Team team) const
++{
++    // Deliberately not GetArea(): that passes an area *flag* to
++    // AreaEntry::GetById(), which expects an area *id*, and returns unrelated
++    // areas - a position in the Barrens reported "Silverpine Forest".
++    AreaEntry const* area = AreaEntry::GetByAreaFlagAndMap(getAreaFlag(), getMapId());
++    if (!area)
++        return false;
++
++    uint32 areaTeam = area->Team;
++    if (areaTeam == AREATEAM_NONE && area->ZoneId)
++        if (AreaEntry const* zone = AreaEntry::GetById(area->ZoneId))
++            areaTeam = zone->Team;
++
++    return (areaTeam == AREATEAM_ALLY  && team == HORDE)
++        || (areaTeam == AREATEAM_HORDE && team == ALLIANCE);
++}
++
+ std::string WorldPosition::getAreaName(const bool fullName, const bool zoneName) const
+ {
+     if (!isOverworld())
+diff --git a/src/modules/PlayerBots/playerbot/WorldPosition.h b/src/modules/PlayerBots/playerbot/WorldPosition.h
+index 94b7eaa..18154bc 100644
+--- a/src/modules/PlayerBots/playerbot/WorldPosition.h
++++ b/src/modules/PlayerBots/playerbot/WorldPosition.h
+@@ -311,6 +311,11 @@ namespace ai
+             loadVMap();
+             return isValid() && isVmapLoaded() ? sTerrainMgr.GetAreaFlag(getMapId(), coord_x, coord_y, coord_z) : 0; };
+         AreaTableEntry const* GetArea() const;
++
++        // Does this position sit in the home territory of the faction opposing
++        // 'team'? Contested zones (team NONE) are not. Sub-areas inherit their
++        // zone's team - "The Crossroads" itself carries none, The Barrens does.
++        bool isEnemyHomeZoneFor(Team team) const;
+         std::string getAreaName(const bool fullName = true, const bool zoneName = false) const;
+         // Penqle's TerrainInfo has no AreaNameInfo or GetAreaName method.
+         // Stub to empty string (loses WMO area-override lookup; would need a Penqle-side equivalent).
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTravelTargetAction.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTravelTargetAction.cpp
+index 12ff8bc..1533795 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTravelTargetAction.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/ChooseTravelTargetAction.cpp
+@@ -321,52 +321,6 @@ inline std::string PrintPartion(uint32 sqPartition)
+     return "> " + std::to_string(prevPartition);
+ }
+ 
+-namespace
+-{
+-    // Is this destination point inside the enemy faction's home territory?
+-    //
+-    // The existing faction checks only ever look at the destination NPC itself
+-    // (RpgTravelDestination::IsActive, GrindTravelDestination::IsActive). That
+-    // is not enough: neutral faction 35 NPCs are friendly to both sides, yet
+-    // some of them stand in the middle of enemy towns. Gather/skin/mine nodes
+-    // are not faction checked at all.
+-    //
+-    // Observed live: Alliance bots walked across the Barrens into The
+-    // Crossroads (a Horde town) to skin gazelles and pick herbs, did not fight
+-    // back - a gather node is not a combat target - and were cut down by the
+-    // eleven level 40 Horde Guards. After releasing they came straight back,
+-    // because the destination was still valid.
+-    //
+-    // The check sits here rather than in one destination type on purpose: this
+-    // is where the real coordinates of the chosen point are available, so it
+-    // covers explore, quest, rpg and gather destinations alike.
+-    //
+-    // Contested zones (team NONE, e.g. Stranglethorn Vale) stay open on
+-    // purpose - only territory owned by the other side is blocked.
+-    bool IsEnemyHomeZone(WorldPosition const& pos, Team team)
+-    {
+-        // Do NOT use WorldPosition::GetArea(): it passes an area *flag* to
+-        // AreaEntry::GetById(), which expects an area *id*. That returns
+-        // unrelated areas - measured live, a position in the Barrens (Kalimdor)
+-        // reported "Silverpine Forest" (Eastern Kingdoms).
+-        // GetByAreaFlagAndMap resolves flag plus map correctly.
+-        AreaEntry const* area = AreaEntry::GetByAreaFlagAndMap(pos.getAreaFlag(), pos.getMapId());
+-        if (!area)
+-            return false;
+-
+-        uint32 areaTeam = area->Team;
+-
+-        // Sub-areas such as "The Crossroads" carry no team of their own and
+-        // inherit it from their zone (The Barrens = AREATEAM_HORDE).
+-        if (areaTeam == AREATEAM_NONE && area->ZoneId)
+-            if (AreaEntry const* zone = AreaEntry::GetById(area->ZoneId))
+-                areaTeam = zone->Team;
+-
+-        return (areaTeam == AREATEAM_ALLY  && team == HORDE)
+-            || (areaTeam == AREATEAM_HORDE && team == ALLIANCE);
+-    }
+-}
+-
+ //Sets the target to the best destination.
+ bool ChooseTravelTargetAction::SetBestTarget(Player* requester, TravelTarget* target, PartitionedTravelList& partitionedList, bool onlyActive)
+ {
+@@ -400,7 +354,7 @@ bool ChooseTravelTargetAction::SetBestTarget(Player* requester, TravelTarget* ta
+             {
+                 // Checked after IsActive so the area lookup only happens for
+                 // the point that was actually selected.
+-                if (!target->IsForced() && position && IsEnemyHomeZone(*position, bot->GetTeam()))
++                if (!target->IsForced() && position && position->isEnemyHomeZoneFor(bot->GetTeam()))
+                 {
+                     ai->TellDebug(requester, "Skipping " + destination->GetTitle() + " - enemy home zone", "debug travel");
+ 
+-- 
+2.47.3
+

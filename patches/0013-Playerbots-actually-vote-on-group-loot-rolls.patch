@@ -1,0 +1,314 @@
+From 9232218f4b35a7770494792b685318e599a8b4f2 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Thu, 30 Jul 2026 12:07:34 +0100
+Subject: [PATCH 13/14] Playerbots: actually vote on group loot rolls
+
+The path was never finished - RollOnItemInSlot returned false unconditionally, LootStartRollAction filled the pending list through Loot::GetRollForSlot, a stub returning nullptr, and ActiveRolls::CleanUp used the same stub and therefore erased every entry the moment it was added. No bot ever voted and the countdown ran out on every single item.
+
+This core keeps rolls in Group::RollId, so votes go through Group::CountRollVote - the same entry point the client uses. Group::GetActiveRoll gives the bots a read-only view without opening up the roll list.
+
+Bots defer to the people in the group: they wait while any real player still has the dialog open, and they never roll need against a player who asked for need. If nobody clicks, they vote once half the countdown is gone so one absent player cannot make everyone sit out the timer.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/game/Group/Group.cpp                      |   9 +
+ src/game/Group/Group.h                        |   4 +
+ .../strategy/actions/LootRollAction.cpp       | 155 ++++++++++++------
+ .../strategy/actions/LootRollAction.h         |   3 +
+ .../playerbot/strategy/values/LootValues.cpp  |  14 +-
+ 5 files changed, 125 insertions(+), 60 deletions(-)
+
+diff --git a/src/game/Group/Group.cpp b/src/game/Group/Group.cpp
+index a2dc70a..07eb3cf 100644
+--- a/src/game/Group/Group.cpp
++++ b/src/game/Group/Group.cpp
+@@ -964,6 +964,15 @@ bool Group::CountRollVote(ObjectGuid const& playerGUID, Rolls::iterator& rollI,
+     return false;
+ }
+ 
++Roll const* Group::GetActiveRoll(ObjectGuid const& lootedTarget, uint32 itemSlot) const
++{
++    for (Roll const* roll : RollId)
++        if (roll && roll->lootedTargetGUID == lootedTarget && roll->itemSlot == itemSlot)
++            return roll;
++
++    return nullptr;
++}
++
+ void Group::StartLootRoll(Creature* lootTarget, LootMethod method, Loot* loot, uint8 itemSlot)
+ {
+     if (itemSlot >= loot->items.size())
+diff --git a/src/game/Group/Group.h b/src/game/Group/Group.h
+index 630ef4e..e3c0fb3 100644
+--- a/src/game/Group/Group.h
++++ b/src/game/Group/Group.h
+@@ -364,6 +364,10 @@ class Group
+         void NeedBeforeGreed(Creature* creature, Loot* loot);
+         void MasterLoot(Creature* creature, Loot* loot, Player* player);
+         bool CountRollVote(Player* player, ObjectGuid const& lootedTarget, uint32 itemSlot, RollVote vote);
++        // Read-only view of a running roll. Playerbots need to see how the
++        // humans in the group voted before casting their own vote, without
++        // opening up the roll list itself.
++        Roll const* GetActiveRoll(ObjectGuid const& lootedTarget, uint32 itemSlot) const;
+         void StartLootRoll(Creature* lootTarget, LootMethod method, Loot* loot, uint8 itemSlot);
+         void EndRoll(Loot* loot);
+ 
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/LootRollAction.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/LootRollAction.cpp
+index b038507..2ebc897 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/LootRollAction.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/LootRollAction.cpp
+@@ -3,6 +3,8 @@
+ #include "LootRollAction.h"
+ #include "playerbot/strategy/values/ItemUsageValue.h"
+ #include "playerbot/strategy/values/LootValues.h"
++#include "Group/Group.h"
++#include "Maps/Map.h"
+ 
+ using namespace ai;
+ 
+@@ -36,18 +38,28 @@ bool LootStartRollAction::Execute(Event& event)
+ 
+     LootRollMap lootRolls = AI_VALUE(LootRollMap, "active rolls");
+ 
+-    if (lootRolls.find(creatureGuid) != lootRolls.end())
++    if (!bot->GetGroup())
+         return false;
+ 
+-    Loot* loot = sLootMgr.GetLoot(bot, creatureGuid);
+-    if (!loot)
+-        return false;
++    // One packet is sent per item, so remember exactly this slot. The old
++    // code walked every loot slot through Loot::GetRollForSlot and found
++    // nothing, and bailed out entirely once the creature was known - which
++    // would have dropped the second item of any corpse anyway.
++    bool known = false;
++    auto range = lootRolls.equal_range(creatureGuid);
++    for (auto itr = range.first; itr != range.second; ++itr)
++    {
++        if (itr->second == itemSlot)
++        {
++            known = true;
++            break;
++        }
++    }
+ 
+-    for(uint8 i=0;i< MAX_NR_LOOT_ITEMS;i++)
+-        if(loot->GetRollForSlot(i))
+-            lootRolls.insert({ creatureGuid, i });
+-        
+-    ActiveRolls::CleanUp(bot,lootRolls);
++    if (!known)
++        lootRolls.insert({ creatureGuid, itemSlot });
++
++    ActiveRolls::CleanUp(bot, lootRolls);
+ 
+     SET_AI_VALUE(LootRollMap, "active rolls", lootRolls);
+ 
+@@ -164,16 +176,17 @@ bool RollAction::Execute(Event& event)
+ 
+ ItemQualifier RollAction::GetRollItem(ObjectGuid lootGuid, uint32 slot)
+ {
+-    Loot* loot = sLootMgr.GetLoot(bot, lootGuid);
+-    if (!loot)
+-        return ItemQualifier();
+-
+-    LootItem* item = loot->GetLootItemInSlot(slot);
++    if (Loot* loot = sLootMgr.GetLoot(bot, lootGuid))
++        if (LootItem* item = loot->GetLootItemInSlot(slot))
++            return ItemQualifier(item);
+ 
+-    if (!item)
+-        return ItemQualifier();
++    // The loot object is only reachable while the bot has the corpse open.
++    // The group's roll carries the same item and lasts the whole countdown.
++    if (Group* group = bot->GetGroup())
++        if (Roll const* roll = group->GetActiveRoll(lootGuid, slot))
++            return ItemQualifier(roll->itemid, roll->itemRandomPropId);
+ 
+-    return ItemQualifier(item);
++    return ItemQualifier();
+ }
+ 
+ RollVote RollAction::CalculateRollVote(ItemQualifier& itemQualifier)
+@@ -239,32 +252,86 @@ RollVote RollAction::CalculateRollVote(ItemQualifier& itemQualifier)
+ 
+ bool RollAction::RollOnItemInSlot(RollVote vote, ObjectGuid lootGuid, uint32 slot)
+ {
+-    Loot* loot = sLootMgr.GetLoot(bot, lootGuid);
+-    if (!loot)
++    Group* group = bot->GetGroup();
++    if (!group || !group->GetActiveRoll(lootGuid, slot))
+         return false;
+ 
+-    LootItem* item = loot->GetLootItemInSlot(slot);
+-    ItemPrototype const* proto = sItemStorage.LookupEntry<ItemPrototype>(item->itemId);
+-    if (!proto)
+-        return false;
++    if (vote != ROLL_NEED && vote != ROLL_GREED && vote != ROLL_PASS)
++        vote = ROLL_PASS;
++
++    // Same entry point the client uses via CMSG_LOOT_ROLL. The core checks
++    // eligibility and resolves the roll once everyone has voted.
++    group->CountRollVote(bot, lootGuid, slot, vote);
++
++    LootRollMap lootRolls = AI_VALUE(LootRollMap, "active rolls");
++
++    ActiveRolls::CleanUp(bot, lootRolls, lootGuid, slot);
+ 
+-    // Penqle has no GroupLootRoll system; GetRollForSlot returns nullptr.
+-    void* lootRoll = loot->GetRollForSlot(slot);
+-    if (!lootRoll)
++    SET_AI_VALUE(LootRollMap, "active rolls", lootRolls);
++
++    return true;
++}
++
++// Do any real players still have the roll dialog open, and did one of them
++// ask for need? Bots are ignored - they are expected to sort themselves out.
++bool RollAction::HumansStillDeciding(ObjectGuid lootGuid, uint32 slot, bool& humanNeeds)
++{
++    humanNeeds = false;
++
++    Group* group = bot->GetGroup();
++    if (!group)
+         return false;
+ 
+-    bool didRoll = false; // Wiring group-roll properly is future work.
++    Roll const* roll = group->GetActiveRoll(lootGuid, slot);
++    if (!roll)
++        return false;
+ 
+-    if (didRoll)
++    bool waiting = false;
++    for (auto const& vote : roll->playerVote)
+     {
+-        LootRollMap lootRolls = AI_VALUE(LootRollMap, "active rolls");
+-
+-        ActiveRolls::CleanUp(bot, lootRolls, lootGuid, slot);
++        Player* voter = sObjectMgr.GetPlayer(vote.first);
++        if (!voter || voter->GetPlayerbotAI())
++            continue;
+ 
+-        SET_AI_VALUE(LootRollMap, "active rolls", lootRolls);
++        if (vote.second == ROLL_NEED)
++            humanNeeds = true;
++        else if (vote.second == ROLL_NOT_EMITED_YET)
++            waiting = true;
+     }
+ 
+-    return didRoll;
++    return waiting;
++}
++
++// Half the countdown is gone. Past that the bot votes regardless, so one
++// player who walked away cannot make the whole group wait out the timer.
++bool RollAction::RollAboutToExpire(ObjectGuid lootGuid)
++{
++    Creature* target = bot->GetMap() ? bot->GetMap()->GetCreature(lootGuid) : nullptr;
++    if (!target)
++        return true;
++
++    uint32 const left = target->GetGroupLootTimer();
++    return left == 0 || left < 30 * IN_MILLISECONDS;
++}
++
++// Vote on one item the polite way.
++bool RollAction::RollWithEtiquette(ObjectGuid lootGuid, uint32 slot)
++{
++    bool humanNeeds = false;
++    if (HumansStillDeciding(lootGuid, slot, humanNeeds) && !RollAboutToExpire(lootGuid))
++        return false;
++
++    ItemQualifier itemQualifier = GetRollItem(lootGuid, slot);
++    if (!itemQualifier.GetId())
++        return false;
++
++    RollVote vote = CalculateRollVote(itemQualifier);
++
++    // A player asked for it. Never roll need against them.
++    if (humanNeeds && vote == ROLL_NEED)
++        vote = ROLL_GREED;
++
++    return RollOnItemInSlot(vote, lootGuid, slot);
+ }
+ 
+ bool LootRollAction::Execute(Event& event)
+@@ -280,32 +347,18 @@ bool LootRollAction::Execute(Event& event)
+     p >> slot; //number of players invited to roll
+     p >> rollType; //need,greed or pass on roll
+ 
+-    ItemQualifier itemQualifier = GetRollItem(guid, slot);
+-
+-    if (!itemQualifier.GetId())
+-        return false;
+-
+-    RollVote vote = CalculateRollVote(itemQualifier);
+-
+-    return RollOnItemInSlot(vote, guid, slot);
++    return RollWithEtiquette(guid, slot);
+ }
+ 
+ bool AutoLootRollAction::Execute(Event& event)
+ {
+     LootRollMap lootRolls = AI_VALUE(LootRollMap, "active rolls");
+-
+-    auto currentRoll = lootRolls.begin();
+-
+-    currentRoll = std::next(currentRoll, urand(0, lootRolls.size() - 1));
+-
+-    ItemQualifier itemQualifier = GetRollItem(currentRoll->first, currentRoll->second);
+-
+-    if (!itemQualifier.GetId())
++    if (lootRolls.empty())
+         return false;
+ 
+-    RollVote vote = CalculateRollVote(itemQualifier);
++    auto currentRoll = std::next(lootRolls.begin(), urand(0, lootRolls.size() - 1));
+ 
+-    return RollOnItemInSlot(vote, currentRoll->first, currentRoll->second);
++    return RollWithEtiquette(currentRoll->first, currentRoll->second);
+ }
+ 
+ bool AutoLootRollAction::isPossible()
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/LootRollAction.h b/src/modules/PlayerBots/playerbot/strategy/actions/LootRollAction.h
+index e73f6d9..1edbf0d 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/LootRollAction.h
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/LootRollAction.h
+@@ -50,6 +50,9 @@ namespace ai
+         virtual ItemQualifier GetRollItem(ObjectGuid lootGuid, uint32 slot);
+         virtual RollVote CalculateRollVote(ItemQualifier& itemQualifier);
+         virtual bool RollOnItemInSlot(RollVote type, ObjectGuid lootGuid, uint32 slot);
++        bool RollWithEtiquette(ObjectGuid lootGuid, uint32 slot);
++        bool HumansStillDeciding(ObjectGuid lootGuid, uint32 slot, bool& humanNeeds);
++        bool RollAboutToExpire(ObjectGuid lootGuid);
+     };
+ 
+     class LootRollAction : public RollAction 
+diff --git a/src/modules/PlayerBots/playerbot/strategy/values/LootValues.cpp b/src/modules/PlayerBots/playerbot/strategy/values/LootValues.cpp
+index b799544..1af7bea 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/values/LootValues.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/values/LootValues.cpp
+@@ -522,15 +522,11 @@ void ActiveRolls::CleanUp(Player* bot, LootRollMap& rollMap, ObjectGuid guid, ui
+ 			continue;
+ 		}
+ 
+-		Loot* loot = sLootMgr.GetLoot(bot, roll->first);
+-		if (!loot)
+-		{
+-			roll = rollMap.erase(roll);
+-			continue;
+-		}
+-
+-		GroupLootRoll* lootRoll = loot->GetRollForSlot(roll->second);
+-		if (!lootRoll)
++		// Ask the group, not the loot object: this core keeps rolls in
++		// Group::RollId and Loot::GetRollForSlot is a stub returning nullptr,
++		// which used to wipe every entry the moment it was added.
++		Group* group = bot->GetGroup();
++		if (!group || !group->GetActiveRoll(roll->first, roll->second))
+ 		{
+ 			roll = rollMap.erase(roll);
+ 			continue;
+-- 
+2.47.3
+

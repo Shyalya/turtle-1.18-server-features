@@ -119,3 +119,38 @@ SoloDungeonRepopAlive.Enable = 0
 GuildBank.NpcEntriesAlliance = 80917,62008,62009,62011
 GuildBank.NpcEntriesHorde = 80918,62010,62012
 
+###############################################################################
+# Patch 0009 - dungeon finder fills groups with bots
+###############################################################################
+
+# Bots are put into the same queue real players sit in, so the existing matcher
+# handles roles, faction, hardcore mode and group building. Getting to the
+# dungeon is not automated: the party leader types "summon" in party chat.
+#
+#   DelaySeconds  how long a real player waits before bots are added. Filling
+#                 instantly would mean nobody ever waits for a human again.
+#   LevelRange    bots may be this many levels above or below the waiting
+#                 player. The instance names the client sends carry no level
+#                 information, so the player is the reference.
+#
+# Real players always take priority: when one joins the queue, every bot not
+# already part of an offer is dropped again.
+
+LFT.BotFill.Enable = 0
+LFT.BotFill.DelaySeconds = 90
+LFT.BotFill.LevelRange = 5
+
+###############################################################################
+# Patch 0012 - premade talent specs (aiplayerbot.conf, not mangosd.conf)
+###############################################################################
+
+# The talent specs are not mangosd.conf keys. They belong in aiplayerbot.conf,
+# and the patch already replaces them in aiplayerbot.conf.dist.in - a generated
+# config from an older checkout keeps the broken stock links, so either
+# regenerate it or copy conf/aiplayerbot.conf.premade-specs over the old
+# AiPlayerbot.PremadeSpec* block by hand.
+#
+# Without this every one of the stock links is rejected at startup against
+# Turtle's reworked trees and the bots end up with no talents at all. The log
+# says "Error with premade spec link" once per link and "No premade specs
+# found!!" at the end.

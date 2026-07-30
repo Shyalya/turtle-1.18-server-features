@@ -9,9 +9,10 @@ Each patch is self-contained — pick the ones you want, in any combination.
 There are no "fix the previous patch" follow-ups; every patch reflects its
 final state.
 
-**Base commit:** generated against
+**Base commit:** 0001-0008 were generated against
 [`5e5e40c`](https://github.com/r-o-sh/tortoise-wow/commit/5e5e40c) on the
-`playerbots-integration-gh` branch.
+`playerbots-integration-gh` branch. 0009-0014 build on top of those, against
+the tree with 0001-0008 already applied - apply them in ascending order.
 
 ## Features
 
@@ -26,6 +27,12 @@ final state.
 | [`0006`](patches/0006-Solo-dungeon-quality-of-life-leech-limits-and-resurre.patch) **Solo dungeon quality of life** | Narrows the existing Leech feature down with four independent switches (PvE only, real players only, solo only, dungeons only) so it stops healing 1000 random bots and skewing PvP. Adds `SoloDungeonRepopAlive`: dying alone in an instance brings you back alive just inside the entrance instead of a corpse run. Both default to off. | config |
 
 | [`0008`](patches/0008-Guild-bank-configurable-vault-keepers.patch) **Guild bank vault keepers** | The guild bank only accepted two hardcoded NPCs, so it worked in Stormwind and Orgrimmar and nowhere else - the decorative keepers Turtle placed in the other capitals were dead ends, and giving them a gossip menu alone would only open a window whose every action the server drops. Now a config list per faction. | config + SQL |
+| [`0009`](patches/0009-Dungeon-finder-fill-waiting-groups-with-playerbots.patch) **Dungeon finder fills with bots** | A player who queues alone waits forever on an empty realm. Bots are inserted into the same queue real players sit in, as ordinary entries, so role assignment, faction and hardcore checks, group building and the offer all run through the existing matcher - no parallel mechanism to keep in sync. Real players keep priority: when one queues, every fill bot not already part of an offer is dropped again. Bots also honour the role they were given, which has to be applied at the end of `ResetStrategies` because `sPlayerbotDbStore.Load` runs in the middle and would overwrite it. | config |
+| [`0010`](patches/0010-Resurrect-at-the-dungeon-entrance-when-only-bots-cou.patch) **Bot groups survive a wipe** | Extends patch 0006. A wiped bot group used to end the run: bots cannot walk back in through an instance portal on this core, so they stayed ghosts at the outdoor graveyard. They now repop alive at the entrance, and so does a player whose group holds nobody but bots - an all-bot party is no more help than an empty one. | – |
+| [`0011`](patches/0011-Keep-playerbots-out-of-enemy-home-zones-when-picking.patch) **Bots out of enemy territory, part two** | Extends patch 0005 to travel destinations and random teleports. `WorldPosition::isEnemyHomeZoneFor` is the shared test; it deliberately avoids `GetArea()`, which passes an area *flag* to `AreaEntry::GetById()` where an area *id* is expected and reported Barrens positions as Silverpine Forest. The teleport filter only applies while at least a quarter of the destinations survive it, so a sparse list cannot strand bots. | – |
+| [`0012`](patches/0012-Replace-the-premade-talent-specs-and-tie-them-to-the.patch) **Talent specs that actually load** | Turtle reworked every talent tree, so all 94 stock links are rejected at startup and bots run around with no talents whatsoever. Replaced with 22 hand-built level 60 specs, each with a levelling path every five levels - without those a level 20 bot is handed the level 60 link and spends its first points in the secondary tree. Talent choice now follows the role the dungeon finder assigned instead of picking at random, and druid feral counts as tank rather than dps. | config |
+| [`0013`](patches/0013-Playerbots-actually-vote-on-group-loot-rolls.patch) **Bots vote on group loot** | The path was never finished: `RollOnItemInSlot` returned false unconditionally, and both the pending-roll list and its cleanup went through `Loot::GetRollForSlot`, a stub returning `nullptr` - so entries were erased the moment they were added. No bot ever voted and the countdown ran out on every single item. This core keeps rolls in `Group::RollId`, so votes now go through `Group::CountRollVote`, the same entry point the client uses. Bots wait while any real player still has the dialog open, never roll need against a player who asked for need, and vote anyway once half the countdown is gone so one absent player cannot make everyone sit out the timer. | – |
+| [`0014`](patches/0014-Playerbots-do-not-equip-items-that-contribute-nothin.patch) **No more roses as headgear** | An item with no stats, no armour, no weapon damage and no spell fell through to `ITEM_USAGE_BAD_EQUIP`, which bots without a real player master put on regardless. On the realm this was written for, 74 bots were wearing a Forever-Lovely Rose on their head and another 34 a rabbit headband or a carnival mask. Shirt and tabard are cosmetic slots and stay exempt. | – |
 
 
 ### Graveyards (SQL + a DBC tool, no patch)
