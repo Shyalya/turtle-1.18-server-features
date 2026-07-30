@@ -23,9 +23,8 @@ the tree with 0001-0008 already applied - apply them in ascending order.
 | [`0003`](patches/0003-Fix-playerbot-battlegrounds-queueing-combat-and-flag.patch) **Playerbot battlegrounds** | Fixes playerbots silently failing to queue for battlegrounds at all (their join packet was never processed); three separate reasons they never fought (attack trigger only wired into a combat engine idle bots never entered, target list only ever saw units already attacking them, flag-carrier attack check tested the wrong unit's aura); and flag carriers freezing forever mid-map. Bots no longer fetch the enemy flag on their own initiative — unless their own team has no real players, so solo-vs-bots matches aren't a walkover. Adds a 20-minute hard match cutoff. | – |
 | [`0004`](patches/0004-Fix-WSG-and-AB-graveyard-resurrection-using-stale-va.patch) **BG graveyard resurrection** ⚠️ | Fixes "Release Spirit" leaving you stuck at your corpse in WSG/AB instead of teleporting to a graveyard. **Environment-specific — read below before applying.** | – |
 | [`0005`](patches/0005-Keep-playerbots-out-of-enemy-faction-territory.patch) **Bots out of enemy territory** | Three separate routes into enemy settlements: taxi destinations drawn from *every* node when `AllFlightPaths = 1`; rpg triggers walking bots to enemy flight masters they can never use; and travel destinations only faction checked per NPC, never by location, so gather/skin/mine nodes inside enemy towns were fair game. | – |
-
 | [`0006`](patches/0006-Solo-dungeon-quality-of-life-leech-limits-and-resurre.patch) **Solo dungeon quality of life** | Narrows the existing Leech feature down with four independent switches (PvE only, real players only, solo only, dungeons only) so it stops healing 1000 random bots and skewing PvP. Adds `SoloDungeonRepopAlive`: dying alone in an instance brings you back alive just inside the entrance instead of a corpse run. Both default to off. | config |
-
+| [`0007`](patches/0007-Clear-Focused-Assault-when-the-WSG-flag-is-captured.patch) **Focused Assault on capture** | The WSG flag aura reapplies Focused Assault every 60s; each stack is +10% damage taken, lasts ten minutes and only clears on a map change, so a carrier who scores keeps the whole penalty into the next round. Now cleared on capture - and only on capture, since clearing it on drop would let a carrier reset the stacks by dropping the flag and taking it back up. | – |
 | [`0008`](patches/0008-Guild-bank-configurable-vault-keepers.patch) **Guild bank vault keepers** | The guild bank only accepted two hardcoded NPCs, so it worked in Stormwind and Orgrimmar and nowhere else - the decorative keepers Turtle placed in the other capitals were dead ends, and giving them a gossip menu alone would only open a window whose every action the server drops. Now a config list per faction. | config + SQL |
 | [`0009`](patches/0009-Dungeon-finder-fill-waiting-groups-with-playerbots.patch) **Dungeon finder fills with bots** | A player who queues alone waits forever on an empty realm. Bots are inserted into the same queue real players sit in, as ordinary entries, so role assignment, faction and hardcore checks, group building and the offer all run through the existing matcher - no parallel mechanism to keep in sync. Real players keep priority: when one queues, every fill bot not already part of an offer is dropped again. Bots also honour the role they were given, which has to be applied at the end of `ResetStrategies` because `sPlayerbotDbStore.Load` runs in the middle and would overwrite it. | config |
 | [`0010`](patches/0010-Resurrect-at-the-dungeon-entrance-when-only-bots-cou.patch) **Bot groups survive a wipe** | Extends patch 0006. A wiped bot group used to end the run: bots cannot walk back in through an instance portal on this core, so they stayed ghosts at the outdoor graveyard. They now repop alive at the entrance, and so does a player whose group holds nobody but bots - an all-bot party is no more help than an empty one. | – |
@@ -89,7 +88,6 @@ level bots still take the shorter road through town, which is fine - they
 survive the level 40 guards.
 
 Optional, and specific to this node graph. Check your own node ids first.
-| [`0007`](patches/0007-Clear-Focused-Assault-when-the-WSG-flag-is-captured.patch) **Focused Assault on capture** | The WSG flag aura reapplies Focused Assault every 60s; each stack is +10% damage taken, lasts ten minutes and only clears on a map change, so a carrier who scores keeps the whole penalty into the next round. Now cleared on capture - and only on capture, since clearing it on drop would let a carrier reset the stacks by dropping the flag and taking it back up. | – |
 
 
 ### PvP trinket dropping the flag (SQL only, no patch)
@@ -196,6 +194,12 @@ Then, if you applied a patch that needs them:
 2. **Config** — append the relevant blocks from
    [`conf/mangosd.conf.additions`](conf/mangosd.conf.additions) to your
    `mangosd.conf`. Note the `*.Enable` switches default to **off**.
+   Patch 0012 is the exception: its talent specs live in `aiplayerbot.conf`,
+   not `mangosd.conf`. The patch rewrites `aiplayerbot.conf.dist.in`, so a
+   freshly generated config picks them up — an existing one keeps the broken
+   stock links until you copy
+   [`conf/aiplayerbot.conf.premade-specs`](conf/aiplayerbot.conf.premade-specs)
+   over its `AiPlayerbot.PremadeSpec*` block.
 3. **Rebuild and restart** — these are C++ source changes:
    ```bash
    cd build && make -j$(nproc) mangosd
@@ -217,8 +221,9 @@ of the playerbots branch):
 | 0002 | applies cleanly |
 | 0003 | not applicable there — `main` ships no PlayerBots module at all |
 | 0004 | applies cleanly |
+| 0005-0014 | not probed |
 
-So the patches tolerate a fair amount of upstream movement. Two honest
+So the patches tolerate a fair amount of upstream movement. Three honest
 caveats:
 
 - **Applying cleanly is not the same as still working.** Patch 0003 in
@@ -229,6 +234,12 @@ caveats:
 - **Patch 0004 is data-dependent, not code-dependent.** It stays wrong on
   any tree whose `WorldSafeLocs.dbc` has the standard IDs, no matter how
   cleanly it applies. Run the check above first.
+- **0005-0014 were never probed against a diverged tree.** They were written
+  and tested on `playerbots-integration-gh` only. Most of them touch the
+  PlayerBots module, so the same reservation as 0003 applies: a tree without
+  that module cannot use them at all. 0009 additionally needs the
+  `src/game/LFT` matchmaker, and 0013 needs a core that keeps loot rolls in
+  `Group::RollId` rather than on the loot object.
 
 Worth knowing: the shop-category fix in 0001 exists upstream on `main`
 already — it simply never propagated to `playerbots-integration-gh`. If
