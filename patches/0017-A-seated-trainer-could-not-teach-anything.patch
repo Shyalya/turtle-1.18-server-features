@@ -1,0 +1,62 @@
+From 48aa08585dc055fd750377985f6c19eee521c6e7 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 11:25:29 +0100
+Subject: [PATCH] A seated trainer could not teach anything
+
+Delarion Featherwing, the herbalist in Alah'Thalas, would not train herbalism.
+Clicking Train did nothing at all: no message, no money taken, nothing in the
+log. His npc_trainer rows are identical to those of a trainer that works, the
+learn spell and its skill line are intact, and the gossip route to the trainer
+list is correct.
+
+The learning spell is not cast by the player but by the trainer, and CheckCast
+rejects any caster that is not standing up. He sits at his table - creature_addon
+stand_state = 1 - so every purchase came back SPELL_FAILED_NOT_STANDING. The
+handler then sends TRAIN_FAIL_UNAVAILABLE, which the client does not display,
+which is why this looked like nothing happening at all rather than a failure.
+
+He is currently the only seated trainer on the realm, so this could have been a
+one-row data change. It belongs here instead: sitting is what the NPC was built
+to do, and the next trainer placed at a table would hit the same wall.
+
+Only seated trainers are affected - they now cast the learning spell as
+triggered. Everything that check would otherwise catch has already been verified
+by this point: interaction, line of sight, that the spell is on this trainer's
+list, that the player can learn it, and that they can afford it.
+
+Found through the error line added earlier in this handler, which reported cast
+result 62 against creature 61842.
+---
+ src/game/Handlers/NPCHandler.cpp | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/game/Handlers/NPCHandler.cpp b/src/game/Handlers/NPCHandler.cpp
+index a498bdd..c5be4f3 100644
+--- a/src/game/Handlers/NPCHandler.cpp
++++ b/src/game/Handlers/NPCHandler.cpp
+@@ -337,11 +337,21 @@ void WorldSession::HandleTrainerBuySpellOpcode(WorldPacket & recv_data)
+     _player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TALK);
+     _player->RemoveSpellsCausingAura(SPELL_AURA_MOUNTED);
+ 
++    // A seated trainer cannot teach. The learning spell is cast by the trainer,
++    // and CheckCast refuses any caster that is not standing up, so the purchase
++    // failed with SPELL_FAILED_NOT_STANDING - silently, since the client shows
++    // nothing for TRAIN_FAIL_UNAVAILABLE and no money changes hands. Turtle has
++    // trainers who sit at their tables by design, so rather than stand them up,
++    // let them cast this as triggered. Everything that check would otherwise
++    // catch has already been verified above: interaction, line of sight, that
++    // the spell is on this trainer's list, that it can be learned, and money.
++    bool const seatedTrainer = !unit->IsStandingUp();
++
+     Spell *spell;
+     if (proto->SpellVisual == 222)
+         spell = new Spell(_player, proto, false);
+     else
+-        spell = new Spell(unit, proto, false);
++        spell = new Spell(unit, proto, seatedTrainer);
+ 
+     SpellCastTargets targets;
+     targets.setUnitTarget(_player);
+-- 
+2.47.3
+
