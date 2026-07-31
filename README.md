@@ -11,7 +11,7 @@ final state.
 
 **Base commit:** 0001-0008 were generated against
 [`5e5e40c`](https://github.com/r-o-sh/tortoise-wow/commit/5e5e40c) on the
-`playerbots-integration-gh` branch. 0009-0017 build on top of those, against
+`playerbots-integration-gh` branch. 0009-0018 build on top of those, against
 the tree with 0001-0008 already applied - apply them in ascending order.
 
 ## Features
@@ -35,6 +35,7 @@ the tree with 0001-0008 already applied - apply them in ascending order.
 | [`0015`](patches/0015-Stop-the-bot-logger-from-treating-finished-text-as-a.patch) **Bot logging no longer kills a Windows server** | `PlayerbotAIConfig::log` handed its argument to `vfprintf` as the format string, and 67 of its 68 callers pass a line they have already assembled. A percent sign anywhere in it - a bot name, a mob name, an item name - was read as a conversion specifier. glibc prints nonsense and carries on, so on Linux the only trace was garbled rows in `bot_events.csv`; the Microsoft runtime calls the invalid-parameter handler instead and the server died with `0xc0000420` and SIGABRT seconds after the first bots came up. The signature is now split: `log` writes verbatim, `logf` keeps the varargs form for the one caller that formats, and carries the format attribute on GCC and Clang so the next such mistake is a warning rather than a crash dump. | – |
 | [`0016`](patches/0016-Ship-debug-symbols-with-Release-builds-on-MSVC.patch) **Readable crash dumps on Windows** | The server installs a crash handler that writes a minidump, but the Release configuration passed neither `/Zi` nor `/DEBUG`, so no `.pdb` existed and every frame in the dump was a bare address - the one file meant to explain a crash explained nothing. The install rule for the `.pdb` was also restricted to `CONFIGURATIONS Debug`, so even a RelWithDebInfo build left it behind in the build tree. `/OPT:REF` and `/OPT:ICF` accompany `/DEBUG`, which disables them by default, so the binary itself is unchanged. | – |
 | [`0017`](patches/0017-A-seated-trainer-could-not-teach-anything.patch) **Seated trainers can teach** | The learning spell is cast by the trainer, not the player, and `CheckCast` rejects any caster that is not standing up. A trainer placed at a table - `creature_addon.stand_state = 1` - therefore refused every purchase with `SPELL_FAILED_NOT_STANDING`. Nothing was visible at either end: no money changed hands, and the `TRAIN_FAIL_UNAVAILABLE` the handler sends is not displayed by the client, so clicking Train simply did nothing. Seated trainers now cast it as triggered; standing ones are untouched. Everything the check would otherwise catch is verified earlier in the same handler - interaction, line of sight, list membership, learnability and money. | – |
+| [`0018`](patches/0018-Embrace-of-the-Viper-the-five-piece-heal-had-neither.patch) **Embrace of the Viper five piece bonus** | Spell 44070 carries `SPELL_AURA_PROC_TRIGGER_SPELL` at 100% chance with proc flags that include taking any damage, and had no `spell_proc_event` row at all - so the heal fired on every hit taken, forever. Its own description says what was meant: *"When your health drops below 35% ... only once every 3 min."* Neither half existed. The cooldown is a `spell_proc_event` row; the health threshold cannot be expressed there and comes as a spell script. The gate sits in `OnCheckProc`, not `OnProc`, because that runs before the proc event is looked up - a hit taken at full health is refused without spending the cooldown, which would otherwise silence the bonus at the moment it exists for. | SQL |
 
 
 ### Graveyards (SQL + a DBC tool, no patch)
@@ -225,7 +226,7 @@ of the playerbots branch):
 | 0003 | not applicable there — `main` ships no PlayerBots module at all |
 | 0004 | applies cleanly |
 | 0008 | **superseded upstream.** `Penqle/main` now implements the guild bank itself: it checks the creature the player has selected against the seven vault keepers by entry, and accepts any creature whose gossip menu carries `GOSSIP_OPTION_GUILD_BANKER`. That second half is the better mechanism - a new keeper needs a database row, not a rebuild. Apply this patch on such a tree only if you also want the config list, and expect to merge `GuildBank.cpp` by hand. The SQL half uses ids that do not collide with upstream's. |
-| 0005-0007, 0009-0017 | not probed |
+| 0005-0007, 0009-0018 | not probed |
 
 So the patches tolerate a fair amount of upstream movement. Three honest
 caveats:
@@ -238,7 +239,7 @@ caveats:
 - **Patch 0004 is data-dependent, not code-dependent.** It stays wrong on
   any tree whose `WorldSafeLocs.dbc` has the standard IDs, no matter how
   cleanly it applies. Run the check above first.
-- **0005-0007 and 0009-0017 were never probed against a diverged tree.** They were written
+- **0005-0007 and 0009-0018 were never probed against a diverged tree.** They were written
   and tested on `playerbots-integration-gh` only. Most of them touch the
   PlayerBots module, so the same reservation as 0003 applies: a tree without
   that module cannot use them at all. 0009 additionally needs the
