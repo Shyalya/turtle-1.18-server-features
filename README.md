@@ -223,7 +223,8 @@ of the playerbots branch):
 | 0002 | applies cleanly |
 | 0003 | not applicable there — `main` ships no PlayerBots module at all |
 | 0004 | applies cleanly |
-| 0005-0016 | not probed |
+| 0008 | **superseded upstream.** `Penqle/main` now implements the guild bank itself: it checks the creature the player has selected against the seven vault keepers by entry, and accepts any creature whose gossip menu carries `GOSSIP_OPTION_GUILD_BANKER`. That second half is the better mechanism - a new keeper needs a database row, not a rebuild. Apply this patch on such a tree only if you also want the config list, and expect to merge `GuildBank.cpp` by hand. The SQL half uses ids that do not collide with upstream's. |
+| 0005-0007, 0009-0016 | not probed |
 
 So the patches tolerate a fair amount of upstream movement. Three honest
 caveats:
@@ -236,7 +237,7 @@ caveats:
 - **Patch 0004 is data-dependent, not code-dependent.** It stays wrong on
   any tree whose `WorldSafeLocs.dbc` has the standard IDs, no matter how
   cleanly it applies. Run the check above first.
-- **0005-0016 were never probed against a diverged tree.** They were written
+- **0005-0007 and 0009-0016 were never probed against a diverged tree.** They were written
   and tested on `playerbots-integration-gh` only. Most of them touch the
   PlayerBots module, so the same reservation as 0003 applies: a tree without
   that module cannot use them at all. 0009 additionally needs the
