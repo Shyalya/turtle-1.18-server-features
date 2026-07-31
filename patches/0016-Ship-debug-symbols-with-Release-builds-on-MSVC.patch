@@ -1,0 +1,75 @@
+From 96a41ac1d086452a2204b953bf70f9449c8469ed Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 09:56:59 +0100
+Subject: [PATCH] Ship debug symbols with Release builds on MSVC
+
+The server installs a crash handler that writes a minidump, but the Release
+configuration passed neither /Zi nor /DEBUG, so no .pdb was produced and every
+frame in the resulting dump was a bare address. The one file meant to explain a
+crash explained nothing.
+
+/OPT:REF and /OPT:ICF accompany /DEBUG because it disables them otherwise; the
+generated binary is unchanged, there is simply a .pdb beside it now.
+
+The install rule was also restricted to CONFIGURATIONS Debug, so even a
+RelWithDebInfo build left its .pdb behind in the build tree. It now uses
+TARGET_PDB_FILE, which resolves correctly in every configuration.
+---
+ CMakeLists.txt             | 13 +++++++++++++
+ src/mangosd/CMakeLists.txt |  4 +++-
+ src/realmd/CMakeLists.txt  |  4 +++-
+ 3 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7745e10..2a6e4c0 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -491,6 +491,19 @@ if(MSVC)
+   #endif()
+   
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /bigobj")
++
++  # Release builds carry debug information too. The server installs a crash
++  # handler that writes a minidump, and without a .pdb every frame in it is a
++  # bare address - the one file meant to explain a crash explains nothing.
++  # /OPT:REF and /OPT:ICF are here because /DEBUG turns them off by default;
++  # with them the generated binary is the same as before, there is simply a
++  # .pdb beside it.
++  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /Zi")
++  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi")
++  foreach(_linker EXE SHARED MODULE)
++    set(CMAKE_${_linker}_LINKER_FLAGS_RELEASE
++        "${CMAKE_${_linker}_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
++  endforeach()
+ endif()
+ 
+ set(CMAKE_SKIP_BUILD_RPATH FALSE)
+diff --git a/src/mangosd/CMakeLists.txt b/src/mangosd/CMakeLists.txt
+index ab52e8d..4884e9c 100644
+--- a/src/mangosd/CMakeLists.txt
++++ b/src/mangosd/CMakeLists.txt
+@@ -209,5 +209,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/mangosd.conf.dist.in ${CMAKE_CURRENT_
+ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/mangosd.conf.dist DESTINATION ${CONF_DIR})
+ 
+ if(WIN32 AND MSVC)
+-  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/\${BUILD_TYPE}/${EXECUTABLE_NAME}.pdb DESTINATION ${BIN_DIR} CONFIGURATIONS Debug)
++  # Every configuration, not just Debug: a Release minidump needs the symbols
++  # just as much, and RelWithDebInfo produced a .pdb that never got installed.
++  install(FILES $<TARGET_PDB_FILE:${EXECUTABLE_NAME}> DESTINATION ${BIN_DIR} OPTIONAL)
+ endif()
+diff --git a/src/realmd/CMakeLists.txt b/src/realmd/CMakeLists.txt
+index 81b494d..d0e6e73 100644
+--- a/src/realmd/CMakeLists.txt
++++ b/src/realmd/CMakeLists.txt
+@@ -125,5 +125,7 @@ install(TARGETS ${EXECUTABLE_NAME} DESTINATION ${BIN_DIR})
+ install(FILES realmd.conf.dist.in DESTINATION ${CONF_DIR} RENAME realmd.conf.dist)
+ 
+ if(WIN32 AND MSVC)
+-  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/\${BUILD_TYPE}/${EXECUTABLE_NAME}.pdb DESTINATION ${BIN_DIR} CONFIGURATIONS Debug)
++  # Every configuration, not just Debug: a Release minidump needs the symbols
++  # just as much, and RelWithDebInfo produced a .pdb that never got installed.
++  install(FILES $<TARGET_PDB_FILE:${EXECUTABLE_NAME}> DESTINATION ${BIN_DIR} OPTIONAL)
+ endif()
+-- 
+2.47.3
+

@@ -11,7 +11,7 @@ final state.
 
 **Base commit:** 0001-0008 were generated against
 [`5e5e40c`](https://github.com/r-o-sh/tortoise-wow/commit/5e5e40c) on the
-`playerbots-integration-gh` branch. 0009-0014 build on top of those, against
+`playerbots-integration-gh` branch. 0009-0016 build on top of those, against
 the tree with 0001-0008 already applied - apply them in ascending order.
 
 ## Features
@@ -32,6 +32,8 @@ the tree with 0001-0008 already applied - apply them in ascending order.
 | [`0012`](patches/0012-Replace-the-premade-talent-specs-and-tie-them-to-the.patch) **Talent specs that actually load** | Turtle reworked every talent tree, so all 94 stock links are rejected at startup and bots run around with no talents whatsoever. Replaced with 22 hand-built level 60 specs, each with a levelling path every five levels - without those a level 20 bot is handed the level 60 link and spends its first points in the secondary tree. Talent choice now follows the role the dungeon finder assigned instead of picking at random, and druid feral counts as tank rather than dps. | config |
 | [`0013`](patches/0013-Playerbots-actually-vote-on-group-loot-rolls.patch) **Bots vote on group loot** | The path was never finished: `RollOnItemInSlot` returned false unconditionally, and both the pending-roll list and its cleanup went through `Loot::GetRollForSlot`, a stub returning `nullptr` - so entries were erased the moment they were added. No bot ever voted and the countdown ran out on every single item. This core keeps rolls in `Group::RollId`, so votes now go through `Group::CountRollVote`, the same entry point the client uses. Bots wait while any real player still has the dialog open, never roll need against a player who asked for need, and vote anyway once half the countdown is gone so one absent player cannot make everyone sit out the timer. | – |
 | [`0014`](patches/0014-Playerbots-do-not-equip-items-that-contribute-nothin.patch) **No more roses as headgear** | An item with no stats, no armour, no weapon damage and no spell fell through to `ITEM_USAGE_BAD_EQUIP`, which bots without a real player master put on regardless. On the realm this was written for, 74 bots were wearing a Forever-Lovely Rose on their head and another 34 a rabbit headband or a carnival mask. Shirt and tabard are cosmetic slots and stay exempt. | – |
+| [`0015`](patches/0015-Stop-the-bot-logger-from-treating-finished-text-as-a.patch) **Bot logging no longer kills a Windows server** | `PlayerbotAIConfig::log` handed its argument to `vfprintf` as the format string, and 67 of its 68 callers pass a line they have already assembled. A percent sign anywhere in it - a bot name, a mob name, an item name - was read as a conversion specifier. glibc prints nonsense and carries on, so on Linux the only trace was garbled rows in `bot_events.csv`; the Microsoft runtime calls the invalid-parameter handler instead and the server died with `0xc0000420` and SIGABRT seconds after the first bots came up. The signature is now split: `log` writes verbatim, `logf` keeps the varargs form for the one caller that formats, and carries the format attribute on GCC and Clang so the next such mistake is a warning rather than a crash dump. | – |
+| [`0016`](patches/0016-Ship-debug-symbols-with-Release-builds-on-MSVC.patch) **Readable crash dumps on Windows** | The server installs a crash handler that writes a minidump, but the Release configuration passed neither `/Zi` nor `/DEBUG`, so no `.pdb` existed and every frame in the dump was a bare address - the one file meant to explain a crash explained nothing. The install rule for the `.pdb` was also restricted to `CONFIGURATIONS Debug`, so even a RelWithDebInfo build left it behind in the build tree. `/OPT:REF` and `/OPT:ICF` accompany `/DEBUG`, which disables them by default, so the binary itself is unchanged. | – |
 
 
 ### Graveyards (SQL + a DBC tool, no patch)
@@ -221,7 +223,7 @@ of the playerbots branch):
 | 0002 | applies cleanly |
 | 0003 | not applicable there — `main` ships no PlayerBots module at all |
 | 0004 | applies cleanly |
-| 0005-0014 | not probed |
+| 0005-0016 | not probed |
 
 So the patches tolerate a fair amount of upstream movement. Three honest
 caveats:
@@ -234,7 +236,7 @@ caveats:
 - **Patch 0004 is data-dependent, not code-dependent.** It stays wrong on
   any tree whose `WorldSafeLocs.dbc` has the standard IDs, no matter how
   cleanly it applies. Run the check above first.
-- **0005-0014 were never probed against a diverged tree.** They were written
+- **0005-0016 were never probed against a diverged tree.** They were written
   and tested on `playerbots-integration-gh` only. Most of them touch the
   PlayerBots module, so the same reservation as 0003 applies: a tree without
   that module cannot use them at all. 0009 additionally needs the
