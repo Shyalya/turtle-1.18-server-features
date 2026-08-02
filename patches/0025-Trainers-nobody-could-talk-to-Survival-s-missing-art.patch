@@ -1,11 +1,11 @@
-From 1c607a3b634f507dd451dcdb93427f77e5f56fa2 Mon Sep 17 00:00:00 2001
+From cfc558df63dc3367d4761934d4800700568ad52c Mon Sep 17 00:00:00 2001
 From: Shyalya <shyalya@users.noreply.github.com>
-Date: Sun, 2 Aug 2026 15:18:37 +0100
+Date: Sun, 2 Aug 2026 16:19:18 +0100
 Subject: [PATCH] Trainers nobody could talk to, Survival's missing artisan
  rank, and guard directions
 
-Three findings that turned out to be the same story: the professions Turtle added
-later were never finished off.
+Three findings that turned out to be the same story: the professions added later
+were never finished off.
 
 Eighteen trainers could not be spoken to at all. creature_template.trainer_type 0
 is TRAINER_TYPE_CLASS, and Creature::IsTrainerOf then compares the player's class
@@ -15,36 +15,40 @@ opened. Disproportionately the expert and artisan ranks, which is why whole
 professions dead-ended: Expert Blacksmith, Artisan Blacksmith, Expert Enchanter,
 both Expert Survivalists.
 
-The right value was read off the data. Every intact trainer of the same skill
-uses trainer_type 2 - 27 for blacksmithing, 26 for tailoring, 25 for fishing, 12
-for survival - and weapon masters likewise. Portal trainers use 0 with class 8;
-44 of 45 hunter trainers use 0 with class 3. Naela Trance (1459) is left alone:
-she is subtitled Bowyer but her rows are mage spells, so neither value is right
-until her spell list is sorted out.
+The right value was read off the data rather than guessed. Every intact trainer
+of the same skill uses trainer_type 2 - 27 for blacksmithing, 26 for tailoring,
+25 for fishing, 12 for survival - and weapon masters likewise. Portal trainers use
+0 with class 8; 44 of 45 hunter trainers use 0 with class 3. Naela Trance (1459)
+is left alone: she is subtitled Bowyer but her rows are mage spells, so neither
+value is right until her spell list is sorted out.
 
 Survival could not pass 225. Spell 46057, the artisan rank, appears in neither
 npc_trainer nor npc_trainer_template. Thirty-three items require the skill and
 nine ask for more than 225 - up to four at 300 - all present and all unreachable.
 Rufus Hardwick (50070) gets it: the documented artisan trainer, at Nesingwary's
-Expedition, and the only survival trainer with faction 35, friendly to both
-sides. Cost 50000 at skill 200 is what every profession here charges for artisan,
-and level 35 continues Survival's own 1/10/20 ladder.
+Expedition, and the only survival trainer with faction 35, friendly to both sides.
+Cost 50000 at skill 200 is what every profession here charges for artisan, and
+level 35 continues Survival's own 1/10/20 ladder.
 
 And no guard mentioned Survival anywhere, against thirteen entries for Herbalism.
 Hellador Swiftluck (62962) is placed while we are here - a complete template with
-44 trainer rows, no spawn, and faction 371, the Alah'Thalas faction, which is
-also why that city had no survival trainer. Each of the thirteen profession menus
-gains an entry pointing at its nearest trainer, measured by comparing the
-centroid of each menu's existing points of interest against every trainer
-position rather than guessed.
+44 trainer rows, no spawn, and faction 371, the Alah'Thalas faction, which is also
+why that city had no survival trainer. His equipment_id pointed at a
+creature_equip_template row that does not exist, which logged an error on every
+startup once he was actually in the world; it is 0 now, as it is for every other
+survival trainer. Each of the thirteen profession menus gains an entry pointing at
+its nearest trainer, mapped by measuring each menu's point-of-interest centroid
+against every trainer position rather than guessed.
 ---
  sql/database_updates/20260802160000_world.sql | 63 ++++++++++++++++
  sql/database_updates/20260802170000_world.sql | 38 ++++++++++
  sql/database_updates/20260802180000_world.sql | 75 +++++++++++++++++++
- 3 files changed, 176 insertions(+)
+ sql/database_updates/20260802190000_world.sql | 16 ++++
+ 4 files changed, 192 insertions(+)
  create mode 100644 sql/database_updates/20260802160000_world.sql
  create mode 100644 sql/database_updates/20260802170000_world.sql
  create mode 100644 sql/database_updates/20260802180000_world.sql
+ create mode 100644 sql/database_updates/20260802190000_world.sql
 
 diff --git a/sql/database_updates/20260802160000_world.sql b/sql/database_updates/20260802160000_world.sql
 new file mode 100644
@@ -240,6 +244,28 @@ index 0000000..e77569a
 +    ( 3572, 10, 0, 'Survival', 1, 1, -1, 10110, 0, 0),  -- Dolanaar
 +    (61772, 11, 0, 'Survival', 1, 1, -1, 10111, 0, 0)   -- Alah'Thalas
 +ON DUPLICATE KEY UPDATE `action_poi_id` = VALUES(`action_poi_id`);
+diff --git a/sql/database_updates/20260802190000_world.sql b/sql/database_updates/20260802190000_world.sql
+new file mode 100644
+index 0000000..44d562a
+--- /dev/null
++++ b/sql/database_updates/20260802190000_world.sql
+@@ -0,0 +1,16 @@
++-- ==============================================
++-- FILE: hellador_equipment_id.sql
++-- GENERATED: 20260802190000
++-- ==============================================
++-- Hellador Swiftluck points at equipment that does not exist.
++--
++-- creature_template.equipment_id is 62962 - his own entry - and there is no such
++-- row in creature_equip_template, so every startup logs "not found in table
++-- creature_equip_template, set to no equipment". It never showed before because
++-- he had no spawn; placing him in Alah'Thalas made it visible.
++--
++-- Every other survival trainer carries 0, which is the normal value for a trainer
++-- and produces no warning. Nothing changes visually - he has no equipment either
++-- way - the startup log simply stops complaining.
++
++UPDATE `creature_template` SET `equipment_id` = 0 WHERE `entry` = 62962;
 -- 
 2.47.3
 

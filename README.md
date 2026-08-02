@@ -11,7 +11,7 @@ final state.
 
 **Base commit:** 0001-0008 were generated against
 [`5e5e40c`](https://github.com/r-o-sh/tortoise-wow/commit/5e5e40c) on the
-`playerbots-integration-gh` branch. 0009-0025 build on top of those, against
+`playerbots-integration-gh` branch. 0009-0027 build on top of those, against
 the tree with 0001-0008 already applied - apply them in ascending order.
 
 ## Features
@@ -42,7 +42,7 @@ the tree with 0001-0008 already applied - apply them in ascending order.
 | [`0022`](patches/0022-Bots-follow-the-role-the-dungeon-finder-gave-them.patch) **Bots honour their assigned role** | A druid queued as tank never shifted to bear: bear or cat was chosen from the ranks of Primal Fury, a talent well down the feral tree, and the assigned role was not consulted at all. It now decides, with the spell test as fallback for unassigned bots. And where the tree cannot fill the role at all - a balance druid on the tank slot - the stored spec is dropped and chosen again with the role in hand, since `AutoSelectTalents` only consults roles when picking a spec for the first time. Random bots only, real contradictions only, level 10 and up. | – |
 | [`0023`](patches/0023-Embrace-of-the-Viper-six-pieces-the-serpent-bites.patch) **Embrace of the Viper: the serpent bites** *(new content)* | Builds on `0018`. The six piece bonus turns cat form into Cobrahn's serpent and did nothing else; it now also applies a poison at ten per cent of a landed melee attack, in cat form only. The poison is 744, the one the Deviate Adders use in Wailing Caverns where the set drops. An existing spell rather than a new id on purpose - the client resolves name, icon and tooltip from its own `Spell.dbc` and shows nothing for an id it does not know. The set tooltip still says nothing about poison; that would need a client patch. | SQL |
 | [`0024`](patches/0024-The-Syndicate-quartermaster-stocked-one-item-out-of-.patch) **Syndicate quartermaster stock** | Thirteen items are gated behind faction 70 with buy prices and ranks 4 to 7 - a designed ladder at item level 30, 40, 50 and 62-63. Anna Lacroix (80946) had one row in `npc_vendor`. The other twelve had no acquisition path at all: no quest reward, nothing in any loot table, no other vendor. No `condition_id` needed, since `BuyItemFromVendor` enforces the rank from the item itself. | SQL |
-| [`0025`](patches/0025-Trainers-nobody-could-talk-to-Survival-s-missing-art.patch) **Unreachable trainers, Survival ranks, guard directions** | `trainer_type` 0 is `TRAINER_TYPE_CLASS`, and `IsTrainerOf` then compares the player class against `trainer_class`; where that is also 0 nothing matches and the window never opens. Eighteen trainers were like that, disproportionately the expert and artisan ranks, so whole professions dead-ended. Survival additionally could not pass 225 - spell 46057 was on no trainer at all, while nine items require more than that. Rufus Hardwick gets it. Hellador Swiftluck (62962), a complete template with no spawn and the Alah'Thalas faction, is placed there. And Survival gains an entry in all thirteen guard profession menus, mapped by measuring each menu's point-of-interest centroid against every trainer position. | SQL |
+| [`0025`](patches/0025-Trainers-nobody-could-talk-to-Survival-s-missing-art.patch) **Unreachable trainers, Survival ranks, guard directions** | `trainer_type` 0 is `TRAINER_TYPE_CLASS`, and `IsTrainerOf` then compares the player class against `trainer_class`; where that is also 0 nothing matches and the window never opens. Eighteen trainers were like that, disproportionately the expert and artisan ranks, so whole professions dead-ended. Survival additionally could not pass 225 - spell 46057 was on no trainer at all, while nine items require more than that. Rufus Hardwick gets it. Hellador Swiftluck (62962), a complete template with no spawn and the Alah'Thalas faction, is placed there. His `equipment_id` also pointed at a `creature_equip_template` row that does not exist, which logged an error every startup once he was actually in the world. And Survival gains an entry in all thirteen guard profession menus, mapped by measuring each menu's point-of-interest centroid against every trainer position. | SQL |
 
 
 ### Graveyards (SQL + a DBC tool, no patch)
@@ -233,7 +233,7 @@ of the playerbots branch):
 | 0003 | not applicable there — `main` ships no PlayerBots module at all |
 | 0004 | applies cleanly |
 | 0008 | **superseded upstream.** `Penqle/main` now implements the guild bank itself: it checks the creature the player has selected against the seven vault keepers by entry, and accepts any creature whose gossip menu carries `GOSSIP_OPTION_GUILD_BANKER`. That second half is the better mechanism - a new keeper needs a database row, not a rebuild. Apply this patch on such a tree only if you also want the config list, and expect to merge `GuildBank.cpp` by hand. The SQL half uses ids that do not collide with upstream's. |
-| 0005-0007, 0009-0025 | not probed |
+| 0005-0007, 0009-0027 | not probed |
 
 So the patches tolerate a fair amount of upstream movement. Three honest
 caveats:
@@ -246,7 +246,7 @@ caveats:
 - **Patch 0004 is data-dependent, not code-dependent.** It stays wrong on
   any tree whose `WorldSafeLocs.dbc` has the standard IDs, no matter how
   cleanly it applies. Run the check above first.
-- **0005-0007 and 0009-0025 were never probed against a diverged tree.** They were written
+- **0005-0007 and 0009-0027 were never probed against a diverged tree.** They were written
   and tested on `playerbots-integration-gh` only. Most of them touch the
   PlayerBots module, so the same reservation as 0003 applies: a tree without
   that module cannot use them at all. 0009 additionally needs the
