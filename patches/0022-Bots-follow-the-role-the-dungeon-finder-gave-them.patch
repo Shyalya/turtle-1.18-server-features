@@ -1,0 +1,114 @@
+From 9e5cf7b9ba9af2e3df96c346af71decc42a33a3a Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Sun, 2 Aug 2026 15:18:37 +0100
+Subject: [PATCH] Bots follow the role the dungeon finder gave them
+
+Two halves of the same complaint: a druid queued as tank never shifted to bear.
+
+AddDefaultCombatStrategies picked bear or cat from two spells - the ranks of
+Primal Fury, a bear talent well down the feral tree, used as a proxy for having
+taken that side. A druid without points that deep, which is every one below the
+level that reaches it, became a cat however it had been queued. The assigned role
+was not consulted at all, though facade->GetForcedRole() is right there and is
+set before ResetStrategies runs. It now decides, and the spell test stays as the
+fallback for bots nobody assigned anything to.
+
+That only helps a druid already feral. A balance druid handed the tank slot kept
+balance talents and tanked in caster form. AutoSelectTalents has known about
+roles since the premade specs went in, but only where it picks a spec in the
+first place; with one already stored it takes the "Continue the current spec"
+branch and the role never comes up. So on a real contradiction the stored choice
+is dropped, the talents are reset, and it chooses again with the role in hand.
+
+Three limits on the respec. Random bots only - someone else's bot keeps the spec
+its owner gave it. Only when AiFactory::GetPlayerRoles says the current tree
+cannot fill the role at all, so a feral druid does not respec merely for
+alternating between tanking and dps. And level 10 and up, below which there are
+no talent points to reset.
+---
+ .../PlayerBots/playerbot/AiFactory.cpp        | 17 +++++++++-
+ .../PlayerBots/playerbot/HostHooks.cpp        | 34 +++++++++++++++++++
+ 2 files changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/src/modules/PlayerBots/playerbot/AiFactory.cpp b/src/modules/PlayerBots/playerbot/AiFactory.cpp
+index b393fd6..572a7ad 100644
+--- a/src/modules/PlayerBots/playerbot/AiFactory.cpp
++++ b/src/modules/PlayerBots/playerbot/AiFactory.cpp
+@@ -468,7 +468,22 @@ void AiFactory::AddDefaultCombatStrategies(Player* player, PlayerbotAI* const fa
+ 
+             if (tab == 1)
+             {
+-                if (player->HasSpell(16961) || player->HasSpell(16958))
++                // Bear or cat. An assigned role decides it outright: a druid the
++                // dungeon finder put on the tank slot should be a bear whether or
++                // not it has reached Primal Fury, and one sent as dps should stay
++                // a cat even if it has.
++                //
++                // Primal Fury - 16958 and 16961 - remains the fallback for bots
++                // nobody assigned anything to, which is every druid simply
++                // wandering the world. It is only a proxy for having gone down
++                // the bear side of the tree, and a poor one below the level that
++                // reaches it.
++                uint8 const role = facade->GetForcedRole();
++
++                bool const tanking = role ? (role & BOT_ROLE_TANK) != 0
++                                          : (player->HasSpell(16961) || player->HasSpell(16958));
++
++                if (tanking)
+                 {
+                     combatEngine->addStrategies("tank feral", "tank assist", "pull", "pull back", "close", NULL);
+                 }
+diff --git a/src/modules/PlayerBots/playerbot/HostHooks.cpp b/src/modules/PlayerBots/playerbot/HostHooks.cpp
+index 4640492..2ad2461 100644
+--- a/src/modules/PlayerBots/playerbot/HostHooks.cpp
++++ b/src/modules/PlayerBots/playerbot/HostHooks.cpp
+@@ -19,6 +19,8 @@
+ #include "playerbot/PlayerbotAIConfig.h"
+ #include "ahbot/AhBot.h"
+ #include "BotDiagnostics.h"
++#include "playerbot/AiFactory.h"
++#include "playerbot/strategy/actions/ChangeTalentsAction.h"
+ 
+ void Player::CreatePlayerbotAI()
+ {
+@@ -158,5 +160,37 @@ void Playerbot_SetForcedRole(Player* bot, uint8 role)
+         return;
+ 
+     ai->SetForcedRole(role);
++
++    // Strategies alone are not enough. A balance druid handed the tank slot
++    // keeps balance talents and tanks in caster form; AutoSelectTalents does
++    // know about roles, but only when picking a spec for the first time - with
++    // one already stored it continues that one and the role never comes up.
++    //
++    // So when the tree cannot fill the role at all, drop the stored choice and
++    // let it choose again with the role in hand. Only for random bots: someone
++    // else's bot keeps the spec its owner gave it. And only on a real
++    // contradiction - a feral druid does not respec just because it alternates
++    // between tanking and dps.
++    if (role != BotRoles::BOT_ROLE_NONE &&
++        bot->GetLevel() >= 10 &&
++        sRandomPlayerbotMgr.IsRandomBot(bot))
++    {
++        BotRoles const current = AiFactory::GetPlayerRoles(bot);
++
++        if (!(current & role))
++        {
++            sRandomPlayerbotMgr.SetValue(bot->GetGUIDLow(), "specNo", 0);
++            sRandomPlayerbotMgr.SetValue(bot->GetGUIDLow(), "specLink", 0, "");
++
++            bot->ResetTalents(true);
++
++            std::ostringstream out;
++            ChangeTalentsAction::AutoSelectTalents(bot, &out, (BotRoles)role);
++
++            sLog.outBasic("LFT: %s respecced for role %u: %s",
++                bot->GetName(), uint32(role), out.str().c_str());
++        }
++    }
++
+     ai->ResetStrategies();
+ }
+-- 
+2.47.3
+

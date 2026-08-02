@@ -1,0 +1,124 @@
+From 8d61f045cd706743385b46320608d4c3d7e66d3b Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Sun, 2 Aug 2026 13:47:03 +0100
+Subject: [PATCH] Guild bank money: unsigned column, checked parsing, overflow
+ guard
+
+GuildBank::b_money is a uint32; the column it is written to is int(11), signed.
+Anything above 2147483647 copper - 214748 gold - is stored as a negative number
+and comes back as nonsense on the next load, and the %u in the UPDATE hides it.
+The column is now unsigned, matching the type the code has always used, which
+also doubles the ceiling to 429496 gold.
+
+Two more at the same spot. DepositMoney parsed the amount with atoi, which
+returns an int, into a uint32; WithdrawMoney used atol - two different functions
+for the same job, neither matching the destination type. Both use strtoul now,
+which also reports whether there was a number there at all.
+
+And b_money += money had no overflow check. An overflow does not cap the balance,
+it wraps it to near zero: the gold vanishes and the depositor has already paid
+for it. The deposit is refused before any money changes hands.
+
+Existing negative balances would be a bank that has already overflowed. The true
+figure cannot be recovered from them, so the migration leaves them alone and lets
+the conversion report them.
+---
+ ...260731160000_guild_bank_money_unsigned.sql | 18 ++++++++++
+ src/game/GuildBank/GuildBank.cpp              | 35 +++++++++++++++++--
+ 2 files changed, 51 insertions(+), 2 deletions(-)
+ create mode 100644 sql/character_updates/20260731160000_guild_bank_money_unsigned.sql
+
+diff --git a/sql/character_updates/20260731160000_guild_bank_money_unsigned.sql b/sql/character_updates/20260731160000_guild_bank_money_unsigned.sql
+new file mode 100644
+index 0000000..1511803
+--- /dev/null
++++ b/sql/character_updates/20260731160000_guild_bank_money_unsigned.sql
+@@ -0,0 +1,18 @@
++-- ==============================================
++-- FILE: guild_bank_money_unsigned.sql
++-- GENERATED: 20260731160000
++-- ==============================================
++-- guild_bank_money.money holds copper and is read into a uint32
++-- (GuildBank::b_money), but the column is int(11) - signed. Anything above
++-- 2147483647 copper, which is 214748 gold, is written as a negative number and
++-- comes back as nonsense on the next load. The %u in the UPDATE hides it.
++--
++-- Making the column unsigned matches the type the code actually uses and
++-- doubles the ceiling to 429496 gold.
++--
++-- Existing negative values would be a bank that has already overflowed; there
++-- is no way to recover the true figure from them, so they are left alone and
++-- the conversion will report them.
++
++ALTER TABLE `guild_bank_money`
++    MODIFY `money` INT(10) UNSIGNED NOT NULL DEFAULT 0;
+diff --git a/src/game/GuildBank/GuildBank.cpp b/src/game/GuildBank/GuildBank.cpp
+index 1050940..a7a69d7 100644
+--- a/src/game/GuildBank/GuildBank.cpp
++++ b/src/game/GuildBank/GuildBank.cpp
+@@ -28,6 +28,7 @@
+ #include "PoolManager.h"
+ #include "Language.h"
+ #include "Log.h"
++#include <limits>
+ #include "MapManager.h"
+ #include "BattleGroundMgr.h"
+ #include "MassMailMgr.h"
+@@ -846,7 +847,18 @@ void GuildBank::DepositMoney(std::string msg)
+ 	Tokenizer params(msg, ':', 2);
+ 	if (params.size() == 2)
+ 	{
+-		money = atoi(params[1]);
++		// strtoul, not atoi: the amount is held in a uint32, and atoi returns an
++		// int. It also tells us whether there was a number there at all.
++		char* end = nullptr;
++		unsigned long const parsed = strtoul(params[1], &end, 10);
++
++		if (end == params[1] || parsed > std::numeric_limits<uint32>::max())
++		{
++			_player->SendAddonMessage(prefix, "DepositMoney:Error:WrongSyntax(" + msg + ")");
++			return;
++		}
++
++		money = uint32(parsed);
+ 	}
+ 	else
+ 	{
+@@ -855,6 +867,16 @@ void GuildBank::DepositMoney(std::string msg)
+ 		return;
+ 	}
+ 
++	// Refuse before taking the money, not after. An overflow here does not cap
++	// the balance, it wraps it to near zero - the gold would be gone and the
++	// depositor would already have paid for it.
++	if (money > std::numeric_limits<uint32>::max() - b_money)
++	{
++		_player->GetSession()->SendNotification("Your guild bank cannot hold that much.");
++		_player->SendAddonMessage(prefix, "DepositMoney:Error:TooMuch");
++		return;
++	}
++
+ 	if (_player->GetMoney() < money)
+ 	{
+ 		_player->SendBuyError(BUY_ERR_NOT_ENOUGHT_MONEY, 0, 0, 0);
+@@ -882,7 +904,16 @@ void GuildBank::WithdrawMoney(std::string msg)
+ 	Tokenizer params(msg, ':', 2);
+ 	if (params.size() == 2)
+ 	{
+-		money = atol(params[1]);
++		char* end = nullptr;
++		unsigned long const parsed = strtoul(params[1], &end, 10);
++
++		if (end == params[1] || parsed > std::numeric_limits<uint32>::max())
++		{
++			_player->SendAddonMessage(prefix, "WithdrawMoney:Error:WrongSyntax(" + msg + ")");
++			return;
++		}
++
++		money = uint32(parsed);
+ 	}
+ 	else
+ 	{
+-- 
+2.47.3
+

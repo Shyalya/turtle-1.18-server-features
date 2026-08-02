@@ -1,0 +1,110 @@
+From d2fc3f544e0bba074e0e422ed65ce85944eb88d2 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Sun, 2 Aug 2026 15:18:37 +0100
+Subject: [PATCH] Summoning a bot: say what happened, and do not land it under
+ the world
+
+Two faults in the same action, both invisible until AiPlayerbot.NonGmFreeSummon
+was turned on and the free branch started being used.
+
+That branch returned Teleport() directly. The meeting stone and innkeeper routes
+both report success and failure; this one said nothing, and a summon that stays
+silent cannot be told apart from a command that never arrived. Teleport() in turn
+called TeleportTo and claimed success without reading what it returned, though it
+refuses in ordinary situations - in combat, mid flight, or when the destination
+map is closed to that player.
+
+Then the placement. Teleport() picks a spot beside the summoner and lets
+UpdateGroundPositionZ decide the height, which asks Map::GetHeight for the ground
+under *that* point - not necessarily the floor the summoner is standing on. In
+front of an instance portal, on a platform or a bridge it returns the terrain
+below, and the bot arrives underneath the walkable surface where it can path
+nowhere and simply stands still.
+
+The function already fell back to the summoner's position when line of sight
+failed; the same guard was missing for height. Five metres is the limit: a slope
+gives a metre or two over the follow distance, a missed floor gives far more. A
+spot that fails is not adjusted but abandoned for the summoner's own position,
+which is walkable by definition since someone is standing on it.
+---
+ .../actions/UseMeetingStoneAction.cpp         | 43 +++++++++++++++++--
+ 1 file changed, 40 insertions(+), 3 deletions(-)
+
+diff --git a/src/modules/PlayerBots/playerbot/strategy/actions/UseMeetingStoneAction.cpp b/src/modules/PlayerBots/playerbot/strategy/actions/UseMeetingStoneAction.cpp
+index 921817d..3e97993 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/actions/UseMeetingStoneAction.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/actions/UseMeetingStoneAction.cpp
+@@ -78,8 +78,17 @@ bool SummonAction::Execute(Event& event)
+     if (!requester || requester->IsBeingTeleported())
+         return false;
+ 
++    // Say something either way. The meeting stone and innkeeper routes below
++    // both report what happened; this one used to return in silence, which is
++    // indistinguishable from the command not arriving at all.
+     if (requester->GetSession()->GetSecurity() > SEC_PLAYER || sPlayerbotAIConfig.nonGmFreeSummon)
+-        return Teleport(requester, requester, bot);
++    {
++        if (!Teleport(requester, requester, bot))
++            return false;
++
++        ai->TellPlayerNoFacing(requester, BOT_TEXT("hello"));
++        return true;
++    }
+ 
+     if(bot->GetMapId() == requester->GetMapId() && !WorldPosition(bot).canPathTo(requester, bot) && bot->GetDistance(requester) < sPlayerbotAIConfig.sightDistance) //We can't walk to requester so fine to short-range teleport.
+         return Teleport(requester, requester, bot);
+@@ -175,13 +184,26 @@ bool SummonAction::Teleport(Player* requester, Player *summoner, Player *player)
+         float followAngle = GetFollowAngle();
+         for (double angle = followAngle - M_PI; angle <= followAngle + M_PI; angle += M_PI / 4)
+         {
++            // How far the ground beside the summoner may sit from the ground
++            // under the summoner before the spot is rejected. A slope gives a
++            // metre or two over the follow distance; a floor that was missed
++            // gives a lot more.
++            static float const MAX_GROUND_DROP = 5.0f;
++
+             uint32 mapId = summoner->GetMapId();
+             float x = summoner->GetPositionX() + cos(angle) * ai->GetRange("follow");
+             float y = summoner->GetPositionY() + sin(angle) * ai->GetRange("follow");
+             float z = summoner->GetPositionZ();
+             summoner->UpdateGroundPositionZ(x, y, z);
+ 
+-            if (!summoner->IsWithinLOS(x, y, z + player->GetCollisionHeight(), true))
++            // UpdateGroundPositionZ asks Map::GetHeight for the ground under
++            // that spot, which is not always the floor the summoner is standing
++            // on: in front of an instance portal, on a platform or a bridge it
++            // returns the terrain below. The bot then arrives underneath the
++            // world, cannot path anywhere and just stands there.
++            bool const badGround = std::fabs(z - summoner->GetPositionZ()) > MAX_GROUND_DROP;
++
++            if (badGround || !summoner->IsWithinLOS(x, y, z + player->GetCollisionHeight(), true))
+             {
+                 x = summoner->GetPositionX();
+                 y = summoner->GetPositionY();
+@@ -207,7 +229,22 @@ bool SummonAction::Teleport(Player* requester, Player *summoner, Player *player)
+                 }
+ 
+                 player->GetMotionMaster()->Clear();
+-                player->TeleportTo(mapId, x, y, z, 0);
++
++                // TeleportTo can refuse - in combat, mid flight, or when the
++                // destination map is not open to this player. Reporting success
++                // regardless left the bot standing where it was with nobody any
++                // the wiser.
++                if (!player->TeleportTo(mapId, x, y, z, 0))
++                {
++                    sLog.outError("SummonAction: %s could not be teleported to map %u at %.2f %.2f %.2f.",
++                        player->GetGuidStr().c_str(), mapId, x, y, z);
++
++                    if (summoner != player)
++                        ai->TellPlayerNoFacing(requester, "I cannot get to you from here");
++
++                    return false;
++                }
++
+                 if(player->isRealPlayer())
+                     player->SendHeartBeat();
+ 
+-- 
+2.47.3
+

@@ -1,0 +1,117 @@
+From 3e39edd37b486d2352c8350db46079b5c6d1541a Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Sun, 2 Aug 2026 14:06:42 +0100
+Subject: [PATCH] Embrace of the Viper, six pieces: the serpent bites
+
+The six piece bonus turns cat form into Cobrahn's serpent and did nothing else.
+It now also applies a poison, which is what the shape rather invites.
+
+The poison is 744, the one the Deviate Adders use in Wailing Caverns where this
+set drops: nature damage every three seconds for thirty, carrying the poison
+dispel type so it can be cured. Reusing an existing spell rather than inventing
+an id is deliberate - the server reads spells from spell_template but the client
+resolves name, icon and tooltip from its own Spell.dbc, and an id it does not
+know would show up as nothing at all.
+
+Cat form only. Out of it there is no serpent to do the biting, and it keeps the
+bonus where the set belongs. The chance is ten per cent of a landed melee swing
+or ability, which at cat speed is a few times a fight; since the poison runs for
+thirty seconds it mostly refreshes itself rather than stacking.
+
+procFlags and procChance carry the rest, and no spell_proc_event row is wanted -
+without one the core requires a hit or a crit, which is right here. Only the form
+test needed code.
+
+Worth stating: the tooltip the player sees still comes from the client and says
+nothing about poison. That would need a client patch.
+---
+ sql/database_updates/20260731190000_world.sql | 29 +++++++++++++++++++
+ src/scripts/spells/spell_item.cpp             | 29 +++++++++++++++++++
+ 2 files changed, 58 insertions(+)
+ create mode 100644 sql/database_updates/20260731190000_world.sql
+
+diff --git a/sql/database_updates/20260731190000_world.sql b/sql/database_updates/20260731190000_world.sql
+new file mode 100644
+index 0000000..b569fb8
+--- /dev/null
++++ b/sql/database_updates/20260731190000_world.sql
+@@ -0,0 +1,29 @@
++-- ==============================================
++-- FILE: viper_set_venom_proc.sql
++-- GENERATED: 20260731190000
++-- ==============================================
++-- Embrace of the Viper, six piece bonus: give the serpent a bite.
++--
++-- Spell 44085 "Cat to Serpent Form" turns cat form into Cobrahn's serpent and
++-- did nothing else. It now also applies a poison, which is what the shape
++-- suggests it should do.
++--
++-- The poison is 744, the one the Deviate Adders use in Wailing Caverns where the
++-- set drops: nature damage every three seconds for thirty, dispellable as a
++-- poison. An existing spell rather than a new one on purpose - the client takes
++-- name, icon and tooltip from its own Spell.dbc, and an id it does not know
++-- would show up as nothing.
++--
++-- procFlags 20 is PROC_FLAG_DEAL_MELEE_SWING plus PROC_FLAG_DEAL_MELEE_ABILITY,
++-- so both white swings and Claw or Shred can carry it. procChance was 101, the
++-- "always" value; ten per cent is roughly every tenth landed attack at cat
++-- speed. No spell_proc_event row is wanted: without one the core requires a hit
++-- or a crit, which is exactly right here.
++--
++-- The form test is in the script, since it cannot be expressed in the data.
++
++UPDATE `spell_template`
++SET `procFlags`   = 20,
++    `procChance`  = 10,
++    `script_name` = 'spell_item_viper_venom'
++WHERE `entry` = 44085;
+diff --git a/src/scripts/spells/spell_item.cpp b/src/scripts/spells/spell_item.cpp
+index 9d73bb0..6239b1e 100644
+--- a/src/scripts/spells/spell_item.cpp
++++ b/src/scripts/spells/spell_item.cpp
+@@ -1005,6 +1005,34 @@ struct spell_jewel_of_wild_magics : public SpellScript
+ // before casting and only sets it afterwards, so turning a proc down here never
+ // spends it. Returning std::nullopt means "no opinion" and lets the default
+ // handler cast 44069 and start the three minutes.
++// Embrace of the Viper, six pieces: the serpent bites. The set already turns
++// cat form into Cobrahn's serpent; the venom belongs to the same shape, so out
++// of cat form there is nothing there to do the biting.
++//
++// Spell 744 is the poison the Deviate Adders use in Wailing Caverns, where this
++// set drops: nature damage every three seconds for thirty, and it carries the
++// poison dispel type so it can be cured. Reusing it rather than inventing an id
++// is deliberate - the client resolves name, icon and tooltip from its own
++// Spell.dbc and would show nothing at all for an id it does not have.
++//
++// The chance lives in procChance on 44085; only the form test needs code.
++struct spell_item_viper_venom : public AuraScript
++{
++    static constexpr uint32 SPELL_DEVIATE_POISON = 744;
++
++    std::optional<SpellAuraProcResult> OnProc(Unit* owner, Unit* victim, uint32 /*damage*/, int32 /*originalAmount*/, Aura* aura, SpellEntry const* /*procSpell*/, uint32 /*procFlag*/, uint32 /*procEx*/, uint32 /*cooldown*/) override
++    {
++        if (!owner || !victim || !victim->IsAlive())
++            return SPELL_AURA_PROC_FAILED;
++
++        if (owner->GetShapeshiftForm() != FORM_CAT)
++            return SPELL_AURA_PROC_FAILED;
++
++        owner->CastSpell(victim, SPELL_DEVIATE_POISON, true, nullptr, aura);
++        return SPELL_AURA_PROC_OK;
++    }
++};
++
+ struct spell_item_wild_regeneration : public AuraScript
+ {
+     static constexpr float HEALTH_THRESHOLD = 0.35f;
+@@ -1134,6 +1162,7 @@ void AddSC_item_spell_scripts()
+     RegisterSpellScript("spell_goblin_jumper_cables", &GetSpellScript<spell_goblin_jumper_cables>);
+     RegisterSpellScript("spell_goblin_jumper_cables_xl", &GetSpellScript<spell_goblin_jumper_cables_xl>);
+     RegisterSpellScript("spell_jewel_of_wild_magics", &GetSpellScript<spell_jewel_of_wild_magics>);
++    RegisterAuraScript("spell_item_viper_venom", &GetAuraScript<spell_item_viper_venom>);
+     RegisterAuraScript("spell_item_wild_regeneration", &GetAuraScript<spell_item_wild_regeneration>);
+     RegisterAuraScript("spell_loop_of_infused_renewal", &GetAuraScript<spell_loop_of_infused_renewal>);
+     RegisterSpellScript("spell_sayges_dark_fortune", &GetSpellScript<spell_sayges_dark_fortune>);
+-- 
+2.47.3
+

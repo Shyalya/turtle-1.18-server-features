@@ -1,0 +1,81 @@
+From 171921705c7152fdfc8d1a4636bda53c77dcf33b Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Sun, 2 Aug 2026 14:34:57 +0100
+Subject: [PATCH] The Syndicate quartermaster stocked one item out of thirteen
+
+Thirteen items are gated behind reputation with faction 70, and they read as a
+designed ladder: item level 30 at rank 4, 40 at rank 5, 50 at rank 6, 62 and 63
+at rank 7, with buy prices running from 17 silver to 32 gold. Nobody sets buy
+prices on loot.
+
+Anna Lacroix (80946, "Syndicate Quartermaster") had exactly one row in npc_vendor
+- the Syndicate Mask. The other twelve existed in item_template, correctly gated,
+and were sold by nobody at all. An import that stopped early rather than a
+decision.
+
+No condition_id is needed: Player::BuyItemFromVendor checks
+RequiredReputationFaction and RequiredReputationRank itself and answers
+BUY_ERR_REPUTATION_REQUIRE, so each item's own rank is the gate. maxcount and
+incrtime stay 0 for unlimited stock, matching the row that was already there.
+Slots follow the ladder rather than item id, so the list reads from the cheapest
+rank upward.
+---
+ sql/database_updates/20260802150000_world.sql | 46 +++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+ create mode 100644 sql/database_updates/20260802150000_world.sql
+
+diff --git a/sql/database_updates/20260802150000_world.sql b/sql/database_updates/20260802150000_world.sql
+new file mode 100644
+index 0000000..1a9a0ab
+--- /dev/null
++++ b/sql/database_updates/20260802150000_world.sql
+@@ -0,0 +1,46 @@
++-- ==============================================
++-- FILE: syndicate_quartermaster_stock.sql
++-- GENERATED: 20260802150000
++-- ==============================================
++-- The Syndicate quartermaster sold one item out of thirteen.
++--
++-- Thirteen items are gated behind reputation with faction 70, the Syndicate, and
++-- they read as a designed ladder: item level 30 at Honored, 40 at Revered, 50
++-- and 62-63 at the top, with buy prices from 17 silver to 32 gold. Nobody sets
++-- buy prices on loot.
++--
++-- Anna Lacroix (80946, "Syndicate Quartermaster") had exactly one row in
++-- npc_vendor - the Syndicate Mask. The other twelve existed in item_template,
++-- correctly gated, and were sold by nobody at all. That is an import that
++-- stopped early, not a design.
++--
++-- No condition_id is needed. Player::BuyItemFromVendor checks
++-- RequiredReputationFaction and RequiredReputationRank itself and answers
++-- BUY_ERR_REPUTATION_REQUIRE, so the rank on each item is the gate. maxcount 0
++-- and incrtime 0 mean unlimited stock, matching the row that was already there.
++--
++-- Slots are numbered in the order the ladder is climbed, so the list reads from
++-- the cheapest rank to the highest rather than by item id.
++
++INSERT INTO `npc_vendor` (`entry`, `slot`, `item`, `maxcount`, `incrtime`, `itemflags`, `condition_id`)
++VALUES
++    -- Honored
++    (80946,  2, 55018, 0, 0, 0, 0),   -- Yellowed Mask
++    (80946,  3, 55019, 0, 0, 0, 0),   -- Enforcer Guard Belt
++    (80946,  4, 55020, 0, 0, 0, 0),   -- Faithful Loop
++    -- Revered
++    (80946,  5, 55021, 0, 0, 0, 0),   -- Alvelo's Reinforced Bludgeon
++    (80946,  6, 55022, 0, 0, 0, 0),   -- Bishop Miranda's Rosary
++    -- Rank 6
++    (80946,  7, 55023, 0, 0, 0, 0),   -- Hath's Stalwart Defense
++    (80946,  8, 55024, 0, 0, 0, 0),   -- Arnella's Silken Trousers
++    (80946,  9, 55025, 0, 0, 0, 0),   -- Trand's Lightweight Shoulder Pads
++    -- Rank 7
++    (80946, 10, 55028, 0, 0, 0, 0),   -- Kavdan's Patient Watch
++    (80946, 11, 55029, 0, 0, 0, 0),   -- Valea's Alacrity
++    (80946, 12, 55030, 0, 0, 0, 0),   -- Aliden's Prejudice
++    (80946, 13, 55031, 0, 0, 0, 0)    -- Pattern: Royal Robes of the Alteraci Princess
++ON DUPLICATE KEY UPDATE `slot` = VALUES(`slot`);
++
++-- The mask that was already listed keeps its place at the front.
++UPDATE `npc_vendor` SET `slot` = 1 WHERE `entry` = 80946 AND `item` = 81080;
+-- 
+2.47.3
+

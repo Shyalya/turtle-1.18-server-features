@@ -1,0 +1,245 @@
+From 1c607a3b634f507dd451dcdb93427f77e5f56fa2 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Sun, 2 Aug 2026 15:18:37 +0100
+Subject: [PATCH] Trainers nobody could talk to, Survival's missing artisan
+ rank, and guard directions
+
+Three findings that turned out to be the same story: the professions Turtle added
+later were never finished off.
+
+Eighteen trainers could not be spoken to at all. creature_template.trainer_type 0
+is TRAINER_TYPE_CLASS, and Creature::IsTrainerOf then compares the player's class
+against trainer_class; where that is also 0 it matches nobody, since classes run
+1 to 11. The function returned false for everyone and the training window never
+opened. Disproportionately the expert and artisan ranks, which is why whole
+professions dead-ended: Expert Blacksmith, Artisan Blacksmith, Expert Enchanter,
+both Expert Survivalists.
+
+The right value was read off the data. Every intact trainer of the same skill
+uses trainer_type 2 - 27 for blacksmithing, 26 for tailoring, 25 for fishing, 12
+for survival - and weapon masters likewise. Portal trainers use 0 with class 8;
+44 of 45 hunter trainers use 0 with class 3. Naela Trance (1459) is left alone:
+she is subtitled Bowyer but her rows are mage spells, so neither value is right
+until her spell list is sorted out.
+
+Survival could not pass 225. Spell 46057, the artisan rank, appears in neither
+npc_trainer nor npc_trainer_template. Thirty-three items require the skill and
+nine ask for more than 225 - up to four at 300 - all present and all unreachable.
+Rufus Hardwick (50070) gets it: the documented artisan trainer, at Nesingwary's
+Expedition, and the only survival trainer with faction 35, friendly to both
+sides. Cost 50000 at skill 200 is what every profession here charges for artisan,
+and level 35 continues Survival's own 1/10/20 ladder.
+
+And no guard mentioned Survival anywhere, against thirteen entries for Herbalism.
+Hellador Swiftluck (62962) is placed while we are here - a complete template with
+44 trainer rows, no spawn, and faction 371, the Alah'Thalas faction, which is
+also why that city had no survival trainer. Each of the thirteen profession menus
+gains an entry pointing at its nearest trainer, measured by comparing the
+centroid of each menu's existing points of interest against every trainer
+position rather than guessed.
+---
+ sql/database_updates/20260802160000_world.sql | 63 ++++++++++++++++
+ sql/database_updates/20260802170000_world.sql | 38 ++++++++++
+ sql/database_updates/20260802180000_world.sql | 75 +++++++++++++++++++
+ 3 files changed, 176 insertions(+)
+ create mode 100644 sql/database_updates/20260802160000_world.sql
+ create mode 100644 sql/database_updates/20260802170000_world.sql
+ create mode 100644 sql/database_updates/20260802180000_world.sql
+
+diff --git a/sql/database_updates/20260802160000_world.sql b/sql/database_updates/20260802160000_world.sql
+new file mode 100644
+index 0000000..8eba03d
+--- /dev/null
++++ b/sql/database_updates/20260802160000_world.sql
+@@ -0,0 +1,63 @@
++-- ==============================================
++-- FILE: trainer_type_zero_class_zero.sql
++-- GENERATED: 20260802160000
++-- ==============================================
++-- Eighteen trainers could not be talked to at all.
++--
++-- creature_template.trainer_type 0 is TRAINER_TYPE_CLASS, and Creature::IsTrainerOf
++-- then compares the player's class against trainer_class:
++--
++--     case TRAINER_TYPE_CLASS:
++--         if (pPlayer->GetClass() != GetCreatureInfo()->trainer_class)
++--             ... return false;
++--
++-- With trainer_class also 0 that matches no player - classes run 1 to 11 - so the
++-- function returns false for everybody and the training window never opens. The
++-- npc_trainer rows behind these NPCs were unreachable.
++--
++-- The correct value is not a guess. Every intact trainer of the same skill uses
++-- trainer_type 2: 27 for blacksmithing, 27 for alchemy, 26 for tailoring, 25 for
++-- fishing, 24 for engineering, 22 for herbalism, 20 for enchanting, 18 for
++-- cooking, 12 for survival. Weapon masters likewise use 2 with trainer_class 0.
++-- Portal trainers use 0 with class 8, and 44 of the 45 hunter trainers use 0 with
++-- class 3.
++--
++-- Most of these are the expert and artisan ranks added later, which is why whole
++-- professions dead-ended: Expert Blacksmith, Artisan Blacksmith, Expert Enchanter,
++-- both Expert Survivalists.
++--
++-- Naela Trance (1459) is deliberately left alone. She is subtitled Bowyer but her
++-- npc_trainer rows are mage spells - Fireball, Frostbolt, Polymorph. Setting her
++-- to 2 would offer those to every class; setting her to a mage trainer contradicts
++-- her subtitle. Her spell list wants sorting out first, and that is a separate
++-- question.
++
++-- Profession and weapon trainers.
++UPDATE `creature_template`
++SET `trainer_type` = 2
++WHERE `entry` IN (
++    8696,   -- Henry Stern (cooking)
++    11557,  -- Meilosh, Timbermaw Hold Quartermaster (tailoring)
++    50070,  -- Rufus Hardwick, Survival Trainer
++    60510,  -- Grubgar, Fisher Orc
++    61277,  -- Todd Bolder (blacksmithing)
++    61438,  -- Cassie Copperlight, Aspiring Tinkerer (engineering)
++    62143,  -- Smith Martin, Expert Blacksmith
++    62282,  -- Linus Huxley, Chef (cooking)
++    62286,  -- Pinky Tosslehouse, Herbalist
++    62290,  -- Enchantress Magilou, Expert Enchanter
++    62299,  -- The Witch of Northwind (alchemy)
++    63056,  -- Ulf Stonetotem, Artisan Blacksmith
++    63071,  -- Swampwalker Krug, Expert Survivalist
++    63072,  -- Nerean Stagtree, Expert Survivalist
++    80320   -- Rodfather, The Eel Hunter (fishing)
++);
++
++-- Class trainers: the type was right, the class was missing.
++UPDATE `creature_template`
++SET `trainer_class` = 3
++WHERE `entry` = 61640;  -- Marksman Rembrandt Olar, Hunter Trainer
++
++UPDATE `creature_template`
++SET `trainer_class` = 8
++WHERE `entry` = 80213;  -- Magistrix Ishalah, Portal Trainer
+diff --git a/sql/database_updates/20260802170000_world.sql b/sql/database_updates/20260802170000_world.sql
+new file mode 100644
+index 0000000..626263b
+--- /dev/null
++++ b/sql/database_updates/20260802170000_world.sql
+@@ -0,0 +1,38 @@
++-- ==============================================
++-- FILE: survival_artisan_rank.sql
++-- GENERATED: 20260802170000
++-- ==============================================
++-- Survival could not pass 225: nobody taught the artisan rank.
++--
++-- Spell 46057 "Artisan Survivalist" exists, and so does the rank it grants,
++-- 46056. Neither npc_trainer nor npc_trainer_template mentioned 46057 anywhere,
++-- so the skill capped at 225 for everyone.
++--
++-- That mattered: 33 items require skill 142, and nine of them ask for more than
++-- 225 - Stabilizing Healing Salve at 250, Stonescale Fishing Trap at 275,
++-- Outline: Fisherman's Backpack at 285, Outline: Oil-Powered Cooker at 295, and
++-- four at 300 including Major Healing Salve. All present in the database and all
++-- unreachable.
++--
++-- Rufus Hardwick (50070) is the trainer meant to hand it out: he is documented
++-- as the artisan survival trainer, sits at Nesingwary's Expedition in
++-- Stranglethorn Vale, and carries faction 35, friendly to both sides - the only
++-- survival trainer that is. The expert rank stays where it is, with the two
++-- Expert Survivalists in Stonard and Feathermoon, one per faction.
++--
++-- The numbers follow the house convention rather than invention. Artisan costs
++-- 50000 at skill 200 for every profession here - herbalism, jewelcrafting, the
++-- lot. Survival's own level gates run 1, 10, 20 for the first three ranks, and 35
++-- is the usual artisan threshold.
++--
++-- Noted but deliberately not touched: Survival's expert rank costs 250, where the
++-- same convention would say 5000. Odd, but it is existing data and cheaper than
++-- it should be, which harms nobody.
++
++INSERT INTO `npc_trainer` (`entry`, `spell`, `spellcost`, `reqskill`, `reqskillvalue`, `reqlevel`)
++VALUES (50070, 46057, 50000, 142, 200, 35)
++ON DUPLICATE KEY UPDATE
++    `spellcost`     = VALUES(`spellcost`),
++    `reqskill`      = VALUES(`reqskill`),
++    `reqskillvalue` = VALUES(`reqskillvalue`),
++    `reqlevel`      = VALUES(`reqlevel`);
+diff --git a/sql/database_updates/20260802180000_world.sql b/sql/database_updates/20260802180000_world.sql
+new file mode 100644
+index 0000000..e77569a
+--- /dev/null
++++ b/sql/database_updates/20260802180000_world.sql
+@@ -0,0 +1,75 @@
++-- ==============================================
++-- FILE: survival_guard_directions.sql
++-- GENERATED: 20260802180000
++-- ==============================================
++-- Guards never mentioned Survival, and Alah'Thalas had no Survival trainer.
++--
++-- Every other profession is listed in the guards' "profession trainers" menus -
++-- thirteen entries for Herbalism, Alchemy and Enchanting, eleven for Mining.
++-- Survival had none at all, in any city, so a player had no way to be told where
++-- to go.
++--
++-- Two halves.
++--
++-- First, Hellador Swiftluck (62962) is finally placed. He is a complete
++-- creature_template with 44 trainer rows and no spawn anywhere - trainer_type
++-- already 2, level 50, and faction 371, which is the Alah'Thalas faction shared
++-- by Callon Sunsail and the Dawnsparks. He was built for that city and never put
++-- in it, which is also why Alah'Thalas was the one place with no Survival
++-- trainer. He goes beside the skinner and the leatherworker, the outdoor trades.
++--
++-- Second, a Survival option in each of the thirteen profession menus, pointing
++-- at the nearest trainer. The mapping was measured, not guessed: the centroid of
++-- each menu's existing points of interest was compared against every Survival
++-- trainer position. Eleven cities have one within 550 yards. Thunder Bluff's
++-- nearest is Nasnan Hillcreek in Bloodhoof Village, 1173 yards away in the same
++-- zone, which is still the right answer for a guard to give.
++--
++-- action_menu_id -1 with a point of interest is the convention the Turtle-added
++-- entries already use - see Jewelcrafting in every one of these menus. It shows
++-- the marker without a follow-up page. icon 6 and flags 99 are what all 275
++-- existing points of interest carry, without exception.
++
++-- ------------------------------------------------------------ Hellador's spawn
++INSERT INTO `creature`
++    (`guid`, `id`, `map`, `position_x`, `position_y`, `position_z`, `orientation`,
++     `spawntimesecsmin`, `spawntimesecsmax`, `wander_distance`,
++     `health_percent`, `mana_percent`, `movement_type`)
++VALUES
++    (2902648, 62962, 0, 4440.0, -2824.0, 10.38, 1.0, 300, 300, 0, 100, 100, 0);
++
++-- ------------------------------------------------------------ Points of interest
++INSERT INTO `points_of_interest` (`entry`, `x`, `y`, `icon`, `flags`, `data`, `icon_name`)
++VALUES
++    (10101, -9073.82,  338.141, 6, 99, 0, 'Krennan Wildberry'),
++    (10102, -2282.58, -252.914, 6, 99, 0, 'Nasnan Hillcreek'),
++    (10103,  2004.57, -4643.45, 6, 99, 0, 'Brakan'),
++    (10104, -4908.46, -1181.60, 6, 99, 0, 'Eissinn Cragbelly'),
++    (10105, 10062.70,  2399.61, 6, 99, 0, 'Nallaeth'),
++    (10106,  1506.47,  49.4654, 6, 99, 0, 'Cynthessa Grimblood'),
++    (10107,  315.389, -4669.36, 6, 99, 0, 'Thonk'),
++    (10108,  2286.59,  300.348, 6, 99, 0, 'Karolina Cloven'),
++    (10109, -5651.79, -495.228, 6, 99, 0, 'Dyrohrinn Boulderhorn'),
++    (10110,  9795.25,  960.877, 6, 99, 0, 'Filadon Shieldarrow'),
++    (10111,   4440.0,  -2824.0, 6, 99, 0, 'Hellador Swiftluck')
++ON DUPLICATE KEY UPDATE `icon_name` = VALUES(`icon_name`);
++
++-- ------------------------------------------------------------ Guard menu entries
++INSERT INTO `gossip_menu_option`
++    (`menu_id`, `id`, `option_icon`, `option_text`, `option_id`, `npc_option_npcflag`,
++     `action_menu_id`, `action_poi_id`, `box_coded`, `condition_id`)
++VALUES
++    (  421, 14, 0, 'Survival', 1, 1, -1, 10101, 0, 0),  -- Stormwind
++    (  751, 12, 0, 'Survival', 1, 1, -1, 10102, 0, 0),  -- Thunder Bluff, points to Bloodhoof
++    ( 1942, 14, 0, 'Survival', 1, 1, -1, 10103, 0, 0),  -- Orgrimmar
++    ( 2168, 14, 0, 'Survival', 1, 1, -1, 10104, 0, 0),  -- Ironforge
++    ( 2351, 10, 0, 'Survival', 1, 1, -1, 10105, 0, 0),  -- Darnassus
++    ( 2847, 14, 0, 'Survival', 1, 1, -1, 10106, 0, 0),  -- Undercity
++    ( 3284, 13, 0, 'Survival', 1, 1, -1, 10107, 0, 0),  -- Razor Hill
++    ( 3330, 12, 0, 'Survival', 1, 1, -1, 10102, 0, 0),  -- Bloodhoof Village
++    ( 3355, 13, 0, 'Survival', 1, 1, -1, 10108, 0, 0),  -- Brill
++    ( 3532, 13, 0, 'Survival', 1, 1, -1, 10101, 0, 0),  -- Goldshire
++    ( 3558, 13, 0, 'Survival', 1, 1, -1, 10109, 0, 0),  -- Kharanos
++    ( 3572, 10, 0, 'Survival', 1, 1, -1, 10110, 0, 0),  -- Dolanaar
++    (61772, 11, 0, 'Survival', 1, 1, -1, 10111, 0, 0)   -- Alah'Thalas
++ON DUPLICATE KEY UPDATE `action_poi_id` = VALUES(`action_poi_id`);
+-- 
+2.47.3
+
