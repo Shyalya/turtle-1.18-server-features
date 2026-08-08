@@ -1,0 +1,80 @@
+From 80d3c4dde85c94bd145c84be85ed1c7ee05bd72a Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Sat, 8 Aug 2026 12:46:22 +0100
+Subject: [PATCH] A creature took damage and was handed to player-only code
+
+Unit::DealDamage branched on
+
+    if (!pVictim->IsPlayer() && addThreat)   { ...threat... }
+    else                                     // "victim is a player"
+    { RewardRage(); DurabilityPointLossForEquipSlot(); }
+
+The comment is wrong. The else branch is reached whenever the victim is a
+player OR addThreat is false, so any damage to a creature that carries no
+threat fell into the player-only half and got cast to Player*.
+
+Crash of 2026-08-08 at 11:40, an uncaught exception rather than a segfault:
+
+  Object::GetUInt32Value            Object.h:447   (MANGOS_ASSERT throws)
+  Player::DurabilityPointsLoss      Player.cpp:6158
+  Player::DurabilityPointLossForEquipSlot
+  Unit::DealDamage
+  Aura::PeriodicTick
+
+The same pointer, 0x7ff70e8e9750, appears as Player in frame 8 and as
+Creature in frame 19 - the object was a creature all along, and the index
+check tripped on whatever the cast produced.
+
+Now the branch asks what the victim is first and whether threat applies
+second. Players and creatures-with-threat behave exactly as before; only the
+case that was misfiled goes where it belongs.
+
+This is core code, not playerbots. Any tree with the same branch has it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/game/Objects/Unit.cpp | 28 +++++++++++++++++++---------
+ 1 file changed, 19 insertions(+), 9 deletions(-)
+
+diff --git a/src/game/Objects/Unit.cpp b/src/game/Objects/Unit.cpp
+index f39e2cc..107c129 100644
+--- a/src/game/Objects/Unit.cpp
++++ b/src/game/Objects/Unit.cpp
+@@ -1014,18 +1014,28 @@ uint32 Unit::DealDamage(Unit* pVictim, uint32 damage, CleanDamage const* cleanDa
+                 pVictim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_DIRECT_DAMAGE);
+         }
+ 
+-        if (!pVictim->IsPlayer() && addThreat)
+-        {
+-            float threat = damage * sSpellMgr.GetSpellThreatMultiplier(spellProto);
+-
+-            if (spell && !spell->m_addThreat)
++        // Split on what the victim is, and only then on whether threat applies.
++        // Written as "!IsPlayer() && addThreat", the else branch caught every
++        // creature hit without threat as well and handed it to the player-only
++        // code below, which casts pVictim to Player*. Crash of 2026-08-08: a
++        // periodic tick on a creature reached DurabilityPointLossForEquipSlot,
++        // and Object::GetUInt32Value threw on the resulting nonsense - the same
++        // pointer appeared as Player in one frame and Creature in another.
++        if (!pVictim->IsPlayer())
++        {
++            if (addThreat)
+             {
+-                // empty on purpose.
++                float threat = damage * sSpellMgr.GetSpellThreatMultiplier(spellProto);
++
++                if (spell && !spell->m_addThreat)
++                {
++                    // empty on purpose.
++                }
++                else
++                    pVictim->AddThreat(this, threat, (cleanDamage && cleanDamage->hitOutCome == MELEE_HIT_CRIT), damageSchoolMask, spellProto);
+             }
+-            else
+-                pVictim->AddThreat(this, threat, (cleanDamage && cleanDamage->hitOutCome == MELEE_HIT_CRIT), damageSchoolMask, spellProto);
+         }
+-        else                                                // victim is a player
++        else                                                // victim really is a player
+         {
+             // Rage from damage received
+             if (this != pVictim && pVictim->GetPowerType() == POWER_RAGE)
