@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Fri, 7 Aug 2026 12:55:00 +0100
+Subject: [PATCH] The battleground queue lock was never taken
+
+BattleGroundQueue declares std::recursive_mutex m_Lock and never acquires
+it. All five acquisitions sit in the file as comments:
+
+  //ACE_Guard<ACE_Recursive_Thread_Mutex> guard(m_Lock);
+
+Left over from the move off ACE - the member was changed to a standard mutex
+and the uses were not. m_QueuedPlayers and m_QueuedGroups are therefore
+entirely unprotected. A few lines below one of them the original author even
+wrote "announce to world, this code needs mutex".
+
+With a handful of players this never shows. With a thousand bots it does:
+they call HandleBattlemasterJoinOpcode straight out of their update, so from
+the map threads, while the world thread runs BattleGroundQueue::Update for
+matchmaking. Crash of 2026-08-07 at 12:05:
+
+  std::_Rb_tree_decrement
+  std::map<ObjectGuid, PlayerQueueInfo>::operator[]
+  BattleGroundQueue::AddGroup      (grp = 0, so the solo branch)
+  WorldSession::HandleBattlemasterJoinOpcode
+  BGJoinAction::JoinQueue
+
+Restoring the guards is safe here, and the ordering was checked rather than
+assumed:
+
+- The mutex is recursive, which it needs to be: AddGroup calls itself for
+  group members from inside the guarded block. The reader starvation that
+  makes a shared_mutex dangerous in this position does not apply.
+- Under m_Lock, m_BattleGroundsMutex is taken. The reverse order does not
+  exist: the only place that runs foreign code under that mutex is
+  ApplyAllBattleGrounds, called from a GM listing command that does not touch
+  the queue.
+- Nothing under the lock waits on anything. Packets are buffered and database
+  writes are queued.
+
+What remains is contention: BattleGroundQueue::Update holds the lock for the
+matchmaking pass, so joins can wait behind it. That is a delay, not a
+deadlock, and it is the state the code was written for.
+---
+diff --git a/src/game/Battlegrounds/BattleGroundMgr.cpp b/src/game/Battlegrounds/BattleGroundMgr.cpp
+index d716b14..895bdad 100644
+--- a/src/game/Battlegrounds/BattleGroundMgr.cpp
++++ b/src/game/Battlegrounds/BattleGroundMgr.cpp
+@@ -186,7 +186,7 @@ GroupQueueInfo * BattleGroundQueue::AddGroup(Player *leader, Group* grp, BattleG
+ 
+     //add players from group to ginfo
+     {
+-        //ACE_Guard<ACE_Recursive_Thread_Mutex> guard(m_Lock);
++        std::lock_guard<std::recursive_mutex> guard(m_Lock);
+         if (grp)
+         {
+             const uint32 group_limit = sWorld.getConfig(CONFIG_UINT32_BATTLEGROUND_GROUP_LIMIT);
+@@ -334,7 +334,7 @@ void BattleGroundQueue::LogQueueInscription(Player *plr, BattleGroundTypeId BgTy
+ void BattleGroundQueue::RemovePlayer(ObjectGuid guid, bool decreaseInvitedCount)
+ {
+     //Player *plr = sObjectMgr.GetPlayer(guid);
+-    //ACE_Guard<ACE_Recursive_Thread_Mutex> guard(m_Lock);
++    std::lock_guard<std::recursive_mutex> guard(m_Lock);
+ 
+     int32 bracket_id = -1;                                     // signed for proper for-loop finish
+     QueuedPlayersMap::iterator itr;
+@@ -414,7 +414,7 @@ void BattleGroundQueue::RemovePlayer(ObjectGuid guid, bool decreaseInvitedCount)
+ //returns true when player pl_guid is in queue and is invited to bgInstanceGuid
+ bool BattleGroundQueue::IsPlayerInvited(ObjectGuid pl_guid, const uint32 bgInstanceGuid, const uint32 removeTime)
+ {
+-    //ACE_Guard<ACE_Recursive_Thread_Mutex> g(m_Lock);
++    std::lock_guard<std::recursive_mutex> g(m_Lock);
+     QueuedPlayersMap::const_iterator qItr = m_QueuedPlayers.find(pl_guid);
+     return (qItr != m_QueuedPlayers.end()
+             && qItr->second.GroupInfo->IsInvitedToBGInstanceGUID == bgInstanceGuid
+@@ -423,7 +423,7 @@ bool BattleGroundQueue::IsPlayerInvited(ObjectGuid pl_guid, const uint32 bgInsta
+ 
+ bool BattleGroundQueue::GetPlayerGroupInfoData(ObjectGuid guid, GroupQueueInfo* ginfo)
+ {
+-    //ACE_Guard<ACE_Recursive_Thread_Mutex> g(m_Lock);
++    std::lock_guard<std::recursive_mutex> g(m_Lock);
+     QueuedPlayersMap::const_iterator qItr = m_QueuedPlayers.find(guid);
+     if (qItr == m_QueuedPlayers.end())
+         return false;
+@@ -707,7 +707,7 @@ should be called from BattleGround::RemovePlayer function in some cases
+ */
+ void BattleGroundQueue::Update(BattleGroundTypeId bgTypeId, BattleGroundBracketId bracket_id)
+ {
+-    //ACE_Guard<ACE_Recursive_Thread_Mutex> guard(m_Lock);
++    std::lock_guard<std::recursive_mutex> guard(m_Lock);
+ 
+     // First, remove players who shouldn't be in queue anymore
+     QueuedPlayersMap::iterator itrOffline = m_QueuedPlayers.begin();
+-- 
+2.43.0
+

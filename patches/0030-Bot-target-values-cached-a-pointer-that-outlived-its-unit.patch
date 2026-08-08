@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Thu, 6 Aug 2026 13:20:00 +0100
+Subject: [PATCH] Bot target values cached a pointer that outlived its unit
+
+CalculatedValue keeps its result for up to checkInterval/2 seconds. For
+UnitCalculatedValue that result is a raw Unit*. If the creature dies inside
+that window, the next read follows a freed pointer.
+
+Crash of 2026-08-06 at 12:08:
+
+  WorldObject::GetReactionTo        Object.cpp:3469
+  Unit::IsFriendlyTo                Unit.cpp:5186
+  ai::AttackAction::IsTargetValid   AttackAction.cpp:223
+  ai::AttackAnythingAction::Execute
+
+IsTargetValid null-checks its target and then hands it to IsFriendlyTo. The
+target came from the cached "grind target" value.
+
+Fixing the caller would have covered one path out of many, so this sits at
+the base instead: the guid is carried alongside the pointer, and a cached
+read resolves through the object accessor rather than trusting what was
+stored. A unit that is gone yields nullptr, which every caller already
+handles - they all null-check. The calculation itself stays on its interval,
+so this adds a hash lookup, not a search.
+
+Fourteen classes derive from UnitCalculatedValue, so every target value is
+covered at once.
+
+The method bodies live in Value.cpp because PlayerbotAI is only forward
+declared in the header. The interval condition is duplicated from
+CalculatedValue::Get; if that changes, this has to follow.
+---
+diff --git a/src/modules/PlayerBots/playerbot/strategy/Value.cpp b/src/modules/PlayerBots/playerbot/strategy/Value.cpp
+index c78a937..b974576 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/Value.cpp
++++ b/src/modules/PlayerBots/playerbot/strategy/Value.cpp
+@@ -49,3 +49,33 @@ std::string GuidPositionManualSetValue::Format()
+ {
+     return chat->formatGuidPosition(value,bot);
+ }
++
++Unit* UnitCalculatedValue::Get()
++{
++    time_t now = time(0);
++    if (!lastCheckTime ||
++        (checkInterval < 2 && (now - lastCheckTime > 0.1)) ||
++        now - lastCheckTime >= checkInterval / 2)
++    {
++        lastCheckTime = now;
++
++        auto pmo = sPerformanceMonitor.start(PERF_MON_VALUE, AiNamedObject::getName(), ai);
++        value = Calculate();
++        m_guid = value ? value->GetObjectGuid() : ObjectGuid();
++        return value;
++    }
++
++    // Cached read: resolve through the guid instead of following the old
++    // pointer. If the object is gone this cleanly yields nullptr.
++    value = m_guid.IsEmpty() ? nullptr : ai->GetUnit(m_guid);
++    return value;
++}
++
++Unit* UnitCalculatedValue::LazyGet()
++{
++    if (!lastCheckTime)
++        return Get();
++
++    value = m_guid.IsEmpty() ? nullptr : ai->GetUnit(m_guid);
++    return value;
++}
+diff --git a/src/modules/PlayerBots/playerbot/strategy/Value.h b/src/modules/PlayerBots/playerbot/strategy/Value.h
+index 502c496..bf15098 100644
+--- a/src/modules/PlayerBots/playerbot/strategy/Value.h
++++ b/src/modules/PlayerBots/playerbot/strategy/Value.h
+@@ -224,11 +224,38 @@ namespace ai
+         UnitCalculatedValue(PlayerbotAI* ai, std::string name = "value", int checkInterval = 1) :
+             CalculatedValue<Unit*>(ai, name, checkInterval) { this->lastCheckTime = time(0) - checkInterval / 2; }
+ 
++        // The base class caches its result for up to checkInterval/2 seconds.
++        // Here that result is a raw Unit* which can outlive its object: if the
++        // creature dies inside that window, the next read follows a freed
++        // pointer. Crashed exactly that way on 2026-08-06, in
++        // AttackAction::IsTargetValid via IsFriendlyTo.
++        //
++        // So the guid is carried alongside and a cached read is resolved
++        // through the object accessor instead. If the object is gone the
++        // result is nullptr, which every caller already handles - they all
++        // null-check. The calculation itself stays on its interval.
++        //
++        // The interval condition is copied from CalculatedValue::Get; if it
++        // changes there it has to be carried over here.
++        //
++        // Defined in Value.cpp: PlayerbotAI is only forward declared here.
++        Unit* Get() override;
++        Unit* LazyGet() override;
++
++        void Set(Unit* unit) override
++        {
++            this->value = unit;
++            m_guid = unit ? unit->GetObjectGuid() : ObjectGuid();
++        }
++
+         virtual std::string Format() override
+         {
+             Unit* unit = this->Calculate();
+             return unit ? unit->GetName() : "<none>";
+         }
++
++    protected:
++        ObjectGuid m_guid;
+     };
+ 
+     class CDPairCalculatedValue : public CalculatedValue<CreatureDataPair const*>
+-- 
+2.43.0
+

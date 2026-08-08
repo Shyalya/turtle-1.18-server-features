@@ -1,0 +1,128 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Wed, 5 Aug 2026 22:05:00 +0100
+Subject: [PATCH] Navmesh tiles removed under a running query
+
+dtNavMesh::removeTile zeroes tile->polys, and dtNavMeshQuery reaches for it
+through getTileAndPolyByRefUnsafe, which by design validates nothing. Any
+polyRef that outlives the removal therefore resolves to nullptr + index.
+
+That is not a theory. Two crashes on 2026-08-05, both inside
+dtQueryFilter::passFilter reached from PathInfo::BuildPolyPath, with poly at
+0x2fce0 and 0x2cca0 - 195808 and 183456, both exact multiples of
+sizeof(dtPoly) = 32, so polygon indices 6119 and 5733 counted from a null
+base.
+
+The tiles are removed by TerrainInfo::CleanUpGrids every GridCleanUpDelay
+milliseconds. Worth knowing: that function never looks at GridUnload. The
+config governs object grids, not terrain, so setting it to 0 does not stop
+navmesh tiles from being unloaded - which is what sent us looking in the
+wrong place first.
+
+A read/write lock around the mesh was the obvious answer and it is the wrong
+one. Tried and reverted: PathInfo::calculate holds it for the whole call and
+Map::GetWalkHitPosition takes the same lock underneath, so as soon as a
+writer queues up, glibc stops admitting readers and the world thread stalls.
+Not a crash, a silent freeze, which is worse.
+
+Keeping the tile loaded removes the problem instead of racing it. Nothing is
+ever zeroed, so no reference can go stale. It costs memory - on a server
+where bots roam everywhere, the tiles were largely staying loaded anyway -
+and MMapTileUnload = 1 restores the old behaviour without a rebuild.
+
+Applies to any mangos-family tree; nothing here is playerbot specific,
+though a thousand of them is what made it show up daily rather than yearly.
+---
+diff --git a/src/game/Maps/MoveMap.cpp b/src/game/Maps/MoveMap.cpp
+index b9045f2..e00b971 100644
+--- a/src/game/Maps/MoveMap.cpp
++++ b/src/game/Maps/MoveMap.cpp
+@@ -207,6 +207,15 @@ bool MMapManager::loadMap(uint32 mapId, int32 x, int32 y)
+ 
+ bool MMapManager::unloadMap(uint32 mapId, int32 x, int32 y)
+ {
++    // dtNavMesh::removeTile zeroes tile->polys, and getTileAndPolyByRefUnsafe
++    // reads it without validating: any polyRef that outlives the removal
++    // resolves to nullptr + index. Keeping the tile loaded makes that
++    // impossible, and costs less than locking queries against cleanup.
++    // Crashes of 2026-08-05: poly was 0x2fce0 and 0x2cca0, both exact
++    // multiples of sizeof(dtPoly) = 32.
++    if (!sWorld.getConfig(CONFIG_BOOL_MMAP_TILE_UNLOAD))
++        return false;
++
+     // check if we have this map loaded
+     if (loadedMMaps.find(mapId) == loadedMMaps.end())
+     {
+@@ -250,6 +259,12 @@ bool MMapManager::unloadMap(uint32 mapId, int32 x, int32 y)
+ 
+ bool MMapManager::unloadMap(uint32 mapId)
+ {
++    // Same reason as above, plus: MMapData is keyed by mapId, not by
++    // instance. Tearing down one instance while a second one of the same
++    // map is running would pull the mesh out from under it.
++    if (!sWorld.getConfig(CONFIG_BOOL_MMAP_TILE_UNLOAD))
++        return false;
++
+     if (loadedMMaps.find(mapId) == loadedMMaps.end())
+     {
+         // file may not exist, therefore not loaded
+diff --git a/src/game/World.cpp b/src/game/World.cpp
+index be94fb0..5d01ee2 100644
+--- a/src/game/World.cpp
++++ b/src/game/World.cpp
+@@ -1031,6 +1031,7 @@ void World::LoadConfigSettingsFromFile(bool reload)
+     setConfig(CONFIG_BOOL_CLEAN_CHARACTER_DB, "CleanCharacterDB", true);
+     setConfig(CONFIG_BOOL_GRID_UNLOAD, "GridUnload", true);
+     setConfig(CONFIG_BOOL_CLEANUP_TERRAIN, "CleanupTerrain", true);
++    setConfig(CONFIG_BOOL_MMAP_TILE_UNLOAD, "MMapTileUnload", false);
+     setConfigPos(CONFIG_UINT32_INTERVAL_SAVE, "PlayerSave.Interval", 15 * MINUTE * IN_MILLISECONDS);
+     setConfigMinMax(CONFIG_UINT32_MIN_LEVEL_STAT_SAVE, "PlayerSave.Stats.MinLevel", 0, 0, MAX_LEVEL);
+     setConfig(CONFIG_BOOL_STATS_SAVE_ONLY_ON_LOGOUT, "PlayerSave.Stats.SaveOnlyOnLogout", true);
+diff --git a/src/game/World.h b/src/game/World.h
+index 8af4c9c..7e460c0 100644
+--- a/src/game/World.h
++++ b/src/game/World.h
+@@ -736,6 +736,9 @@ enum eConfigBoolValues
+     // See LFT/LFTBotFill.cpp
+     CONFIG_BOOL_LFT_BOTFILL_ENABLE,
+     CONFIG_BOOL_AUTOSCALER_ENABLE,
++    // Remove navmesh tiles again at runtime. Off by default, see
++    // MMapManager::unloadMap.
++    CONFIG_BOOL_MMAP_TILE_UNLOAD,
+     CONFIG_BOOL_VALUE_COUNT
+ };
+ 
+@@ -1365,7 +1368,7 @@ class World
+         // Login-Zeitpunkte nicht auf einen gemeinsamen Takt synchronisiert
+         // werden muessen (jeder Account bekommt seine eigene volle Stunde).
+         std::unordered_map<uint32 /*accountId*/, uint32 /*accumulatedMs*/> m_donationPointAccumulatorMs;
+-        // Wie lange bis zum naechsten periodischen Persistieren der obigen
++        // Time until the next periodic persist of the above
+         // Akkumulatoren nach `donation_point_progress` (Login-DB) - siehe
+         // World.cpp. Ohne Persistenz fing der Fortschritt nach jedem Neustart
+         // wieder bei 0 an.
+diff --git a/src/mangosd/mangosd.conf.dist.in b/src/mangosd/mangosd.conf.dist.in
+index e903d37..08b0927 100644
+--- a/src/mangosd/mangosd.conf.dist.in
++++ b/src/mangosd/mangosd.conf.dist.in
+@@ -152,6 +152,17 @@ GridUnload = 0
+ 
+ CleanupTerrain = 1
+ 
++#    MMapTileUnload
++#        Remove navmesh tiles from the mesh again at runtime.
++#        dtNavMesh::removeTile zeroes tile->polys, and dtNavMeshQuery reads it
++#        through getTileAndPolyByRefUnsafe without validating - any polyRef
++#        that outlives the removal resolves to nullptr + index and takes the
++#        server down. Left off, tiles stay loaded: that costs memory but
++#        cannot go wrong.
++#        Default: 0 (off)
++
++MMapTileUnload = 0
++
+ # GridCleanUpDelay. Grid clean up delay.
+ 
+ GridCleanUpDelay = 300000
+-- 
+2.43.0
+
