@@ -12,7 +12,7 @@ Friedhoefe existierten nur serverseitig bei Turtle. Die Positionen lassen sich
 aber exakt aus game_tele rekonstruieren ('alahthalasgraveyard',
 'amanialorgraveyard').
 
-Aufbau der Datei: Header (20 Byte), dann rec Datensaetze zu je 56 Byte
+File layout: a 20 byte header, then rec records of 56 bytes each
 (14 Felder), dann der Stringblock. Beim Anhaengen verschiebt sich der
 Stringblock - die gespeicherten Offsets bleiben aber gueltig, weil sie relativ
 zum Blockanfang sind und die Reihenfolge erhalten bleibt.
@@ -42,11 +42,11 @@ NEU = [
 
 roh = open(QUELLE, 'rb').read()
 magie, rec, fld, rsz, ssz = struct.unpack('<4sIIII', roh[:20])
-assert magie == b'WDBC', "keine DBC-Datei"
+assert magie == b'WDBC', "not a DBC file"
 kopf_ende = 20
 saetze = roh[kopf_ende:kopf_ende + rec * rsz]
 strings = roh[kopf_ende + rec * rsz:]
-assert len(strings) == ssz, "Stringblock passt nicht zum Header"
+assert len(strings) == ssz, "string block does not match the header"
 
 vorhandene = {struct.unpack('<I', saetze[i * rsz:i * rsz + 4])[0] for i in range(rec)}
 neue = [n for n in NEU if n[0] not in vorhandene]

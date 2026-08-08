@@ -184,6 +184,16 @@ EOF
 
 If both report `True`, skip this patch.
 
+### Patches that expect an earlier one
+
+Most patches here stand alone, but two do not, and it is quicker to say so
+than to let you find out from a rejected hunk:
+
+- **0008** edits configuration comments that **0006** adds. Applied on its own
+  against an untouched tree it fails in `mangosd.conf.dist.in`.
+- **0028** touches the config enum in `World.h` next to entries that earlier
+  patches introduce, so a tree without them will need the hunk placed by hand.
+
 ### Patches 0028-0031: crashes that only a busy server finds
 
 These four came out of one week in August 2026 on a realm running about a
