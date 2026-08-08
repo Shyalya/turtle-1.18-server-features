@@ -1,0 +1,49 @@
+From 4c09563a1f00a05b6e9f8f5248cc0bcdec7dd12f Mon Sep 17 00:00:00 2001
+From: Shyalya <shyalya@users.noreply.github.com>
+Date: Sat, 8 Aug 2026 16:33:40 +0100
+Subject: [PATCH] Give every session an anticheat object instead of a null
+ pointer
+
+m_antiCheat is only ever assigned in InitAntiCheatSession, which WorldSocket
+calls during a network login. Bot sessions are constructed directly with a
+null socket and never pass through it, so for them the pointer stays null for
+their whole life.
+
+Seven call sites in MovementHandler dereference it without checking, and
+PlayerbotAI.cpp:2035 calls HandleMoveKnockBackAck directly - one of them. Any
+bot knocked back at the wrong moment takes the server down. Three more
+unchecked uses sit in AsyncCommandHandlers.cpp and Creature.cpp.
+
+The core already ships NullSessionAnticheat, a do-nothing implementation, so
+every session now starts with one and InitAntiCheatSession swaps in the real
+thing on login. That covers the unchecked sites without scattering null tests,
+and the sites that already test the pointer keep working - they now see a
+harmless object instead of nothing.
+
+Found by comparing against Keyrosh021/tortoise-wow, which hit the knockback
+crash and guarded the MovementHandler call sites individually.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/game/WorldSession.cpp | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/game/WorldSession.cpp b/src/game/WorldSession.cpp
+index ef330da..a007cb2 100644
+--- a/src/game/WorldSession.cpp
++++ b/src/game/WorldSession.cpp
+@@ -101,6 +101,14 @@ WorldSession::WorldSession(uint32 id, WorldSocket *sock, AccountTypes sec, time_
+     else
+         m_Address = "<BOT>";
+ 
++    // Start every session with the null implementation so that m_antiCheat is
++    // never a null pointer. InitAntiCheatSession swaps in the real one during
++    // a network login; bot sessions never pass through WorldSocket and so had
++    // nothing at all. Several handlers dereference it without checking -
++    // HandleMoveKnockBackAck among them, which the playerbot module calls
++    // directly, so a knocked-back bot would take the server down.
++    m_antiCheat = std::make_unique<NullSessionAnticheat>(this);
++
+     m_lastUpdateTime = WorldTimer::getMSTime();
+     _analyser = std::make_unique<AccountAnalyser>(this);
+ }

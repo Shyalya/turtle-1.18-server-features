@@ -194,7 +194,7 @@ than to let you find out from a rejected hunk:
 - **0028** touches the config enum in `World.h` next to entries that earlier
   patches introduce, so a tree without them will need the hunk placed by hand.
 
-### Patches 0028-0032: crashes that only a busy server finds
+### Patches 0028-0033: crashes that only a busy server finds
 
 These four came out of one week in August 2026 on a realm running about a
 thousand playerbots. They are worth calling out together because they share a
@@ -208,11 +208,17 @@ things happen at once.
 | 0030 | Bot target values cached a raw `Unit*` for up to a second and followed it after the creature died |
 | 0031 | The battleground queue declares a mutex and never takes it — all five acquisitions were left commented out during the move off ACE |
 | 0032 | A creature taking damage that carries no threat fell into the player-only half of `Unit::DealDamage` and was cast to `Player*` |
+| 0033 | Bot sessions never get an anticheat object, and `MovementHandler` dereferences it unchecked seven times — one of those handlers the bot module calls directly |
 
 Only 0030 is playerbot specific. The others sit in the core and apply to any
 mangos-family tree; bots are simply what made them surface daily instead of
 yearly. 0032 in particular needs no bots at all — any damage source that
 carries no threat will do.
+
+0033 came out of reading [Keyrosh021/tortoise-wow](https://github.com/Keyrosh021/tortoise-wow),
+which hit the same crash and guarded the call sites one by one. The version
+here installs the do-nothing anticheat the core already ships instead, so the
+pointer is never null in the first place.
 
 Two of them, 0029 and 0030, are the same bug wearing different clothes: a raw
 pointer kept across time. If you are hunting something similar, that is the
@@ -272,7 +278,7 @@ of the playerbots branch):
 | 0003 | not applicable there — `main` ships no PlayerBots module at all |
 | 0004 | applies cleanly |
 | 0008 | **superseded upstream.** `Penqle/main` now implements the guild bank itself: it checks the creature the player has selected against the seven vault keepers by entry, and accepts any creature whose gossip menu carries `GOSSIP_OPTION_GUILD_BANKER`. That second half is the better mechanism - a new keeper needs a database row, not a rebuild. Apply this patch on such a tree only if you also want the config list, and expect to merge `GuildBank.cpp` by hand. The SQL half uses ids that do not collide with upstream's. |
-| 0005-0007, 0009-0032 | not probed |
+| 0005-0007, 0009-0033 | not probed |
 
 So the patches tolerate a fair amount of upstream movement. Three honest
 caveats:
@@ -285,7 +291,7 @@ caveats:
 - **Patch 0004 is data-dependent, not code-dependent.** It stays wrong on
   any tree whose `WorldSafeLocs.dbc` has the standard IDs, no matter how
   cleanly it applies. Run the check above first.
-- **0005-0007 and 0009-0032 were never probed against a diverged tree.** They were written
+- **0005-0007 and 0009-0033 were never probed against a diverged tree.** They were written
   and tested on `playerbots-integration-gh` only. Most of them touch the
   PlayerBots module, so the same reservation as 0003 applies: a tree without
   that module cannot use them at all. 0009 additionally needs the
